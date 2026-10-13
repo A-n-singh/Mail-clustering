@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # Only this Google account may sign in (single-owner app).
     owner_email: str = ""
     initial_fetch: int = 3000  # newest mails pulled on first sync
+    sync_interval_minutes: int = 20  # scheduled sync (15-30 min)
     cluster_cap: int = 360  # max mails kept per cluster
 
 

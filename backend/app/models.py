@@ -95,4 +95,5 @@ class SyncRun(Base):
     started: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     ended: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fetched: Mapped[int] = mapped_column(Integer, default=0)
+    total: Mapped[int] = mapped_column(Integer, default=0)  # for the onboarding progress bar
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

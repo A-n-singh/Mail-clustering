@@ -43,3 +43,16 @@ def test_dashboard_flow():
     r = c.post("/actions", json={"message_ids": ["2"], "action": "trash"})
     assert c.post(f"/actions/{r.json()['batch_id']}/undo").json() == {"undone": 1}
     assert c.post("/actions", json={"message_ids": ["1", "2"], "action": "trash", "confirmed": True}).status_code == 400
+
+
+def test_filters_and_status():
+    c, _ = client()
+    c.cookies.set("session", auth.make_session("me@example.com"))
+    assert [g["label"] for g in c.get("/groups?min_score=80").json()] == ["corp.com"]
+    assert [g["label"] for g in c.get("/groups?sender=shop").json()] == ["shop.com"]
+    assert len(c.get("/groups?label=UNREAD").json()) == 2
+    assert c.get("/groups?label=NOPE").json() == []
+    assert c.get("/groups?date_from=2030-01-01").json() == []
+    assert c.get("/sync/status").json()["running"] is False
+    cid = c.get("/groups?sender=shop").json()[0]["cluster_id"]
+    assert len(c.get(f"/groups/{cid}/messages").json()) == 1

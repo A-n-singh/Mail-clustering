@@ -1,41 +1,71 @@
-from datetime import datetime, timedelta, timezone
+import asyncio
+from contextlib import asynccontextmanager
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import String, func, select
 from sqlalchemy.orm import Session
 
 from . import actions as act
 from . import auth
 from .config import settings
-from .db import Base, engine, get_db
+from .db import Base, SessionLocal, engine, get_db
 from .gmail import GmailClient, GoogleGmailClient
 from .models import Action, Cluster, Message, MessageCluster, Owner, Score, SyncRun
 from .security import decrypt, encrypt
 from .capacity import refill
-from .sync import run_sync
+from .sync import run_sync, sync_in_progress
 
-app = FastAPI(title="Gmail Smart Inbox")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    Base.metadata.create_all(engine)
+    task = asyncio.create_task(_scheduler()) if settings.sync_interval_minutes > 0 else None
+    yield
+    if task:
+        task.cancel()
+
+
+app = FastAPI(title="Gmail Smart Inbox", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_url],
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
-@app.on_event("startup")
-def _init():
-    Base.metadata.create_all(engine)
-
-
-def get_gmail(db: Session = Depends(get_db)) -> GmailClient:
+def build_gmail(db: Session) -> GmailClient | None:
     from google.oauth2.credentials import Credentials
     owner = db.scalar(select(Owner))
     if not owner:
-        raise HTTPException(409, "Gmail not connected")
+        return None
     creds = Credentials(None, refresh_token=decrypt(owner.refresh_token_enc),
                         token_uri="https://oauth2.googleapis.com/token",
                         client_id=settings.google_client_id, client_secret=settings.google_client_secret)
     return GoogleGmailClient(creds)
+
+
+def get_gmail(db: Session = Depends(get_db)) -> GmailClient:
+    gmail = build_gmail(db)
+    if gmail is None:
+        raise HTTPException(409, "Gmail not connected")
+    return gmail
+
+
+def _sync_job():
+    with SessionLocal() as db:
+        gmail = build_gmail(db)
+        if gmail and not sync_in_progress(db):
+            try:
+                run_sync(db, gmail, settings.initial_fetch, settings.cluster_cap)
+            except Exception:
+                pass  # recorded in sync_runs.error; next run resumes
+
+
+async def _scheduler():
+    """Sync every SYNC_INTERVAL_MINUTES without blocking the app."""
+    while True:
+        await asyncio.sleep(settings.sync_interval_minutes * 60)
+        await asyncio.to_thread(_sync_job)
 
 
 # ---------- sign-in ----------
@@ -95,17 +125,22 @@ def delete_account(db: Session = Depends(get_db), _: str = Depends(auth.current_
 
 # ---------- sync ----------
 @app.post("/sync")
-def sync(db: Session = Depends(get_db), gmail: GmailClient = Depends(get_gmail),
-         _: str = Depends(auth.current_user)):
-    run = run_sync(db, gmail, settings.initial_fetch, settings.cluster_cap)
-    return {"fetched": run.fetched}
+def sync(background: BackgroundTasks, db: Session = Depends(get_db), _: str = Depends(auth.current_user),
+         __: GmailClient = Depends(get_gmail)):
+    """Start a sync in the background; poll /sync/status for progress."""
+    if sync_in_progress(db):
+        return {"started": False, "reason": "already running"}
+    background.add_task(_sync_job)
+    return {"started": True}
 
 
 @app.get("/sync/status")
 def sync_status(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
     run = db.scalar(select(SyncRun).order_by(SyncRun.id.desc()))
-    return {"running": bool(run and run.ended is None), "fetched": run.fetched if run else 0,
-            "error": run.error if run else None}
+    return {"running": sync_in_progress(db), "fetched": run.fetched if run else 0,
+            "total": run.total if run else 0, "error": run.error if run else None,
+            "connected": db.scalar(select(Owner.id)) is not None,
+            "last_sync": run.ended.isoformat() if run and run.ended else None}
 
 
 # ---------- dashboard data ----------
@@ -135,21 +170,36 @@ def needs_action(limit: int = 50, db: Session = Depends(get_db), _: str = Depend
     return [_row(m, s) for m, s in db.execute(q)]
 
 
+def _filters(since_days, date_from, date_to, sender, label, min_score):
+    """Shared filter conditions (FR-17 / FR-35): date range, sender, label, score threshold."""
+    conds = []
+    if since_days:
+        conds.append(Message.date >= datetime.now(timezone.utc) - timedelta(days=since_days))
+    if date_from:
+        conds.append(Message.date >= date_from)
+    if date_to:
+        conds.append(Message.date < date_to + timedelta(days=1))
+    if sender:
+        conds.append(Message.sender.ilike(f"%{sender}%") | Message.sender_email.ilike(f"%{sender}%"))
+    if label:
+        conds.append(Message.labels.cast(String).like(f'%"{label}"%'))
+    if min_score:
+        conds.append(Score.importance_score >= min_score)
+    return conds
+
+
 @app.get("/groups")
 def groups(db: Session = Depends(get_db), _: str = Depends(auth.current_user),
-           since_days: int | None = None, min_score: int = 0):
-    """Bubble data: size = mail count, color = average importance."""
+           since_days: int | None = None, date_from: date | None = None, date_to: date | None = None,
+           sender: str | None = None, label: str | None = None, min_score: int = 0):
+    """Bubble data: size = mail count, color = average importance. Filters update it live."""
     q = (select(Cluster.cluster_id, Cluster.label, func.count(Message.message_id), func.avg(Score.importance_score),
                 func.sum(Message.size_bytes), Cluster.gmail_total)
          .join(MessageCluster, MessageCluster.cluster_id == Cluster.cluster_id)
          .join(Message, Message.message_id == MessageCluster.message_id)
          .join(Score, Score.message_id == Message.message_id)
-         .where(Message.in_trash == False)  # noqa: E712
+         .where(Message.in_trash == False, *_filters(since_days, date_from, date_to, sender, label, min_score))  # noqa: E712
          .group_by(Cluster.cluster_id, Cluster.label, Cluster.gmail_total))
-    if since_days:
-        q = q.where(Message.date >= datetime.now(timezone.utc) - timedelta(days=since_days))
-    if min_score:
-        q = q.where(Score.importance_score >= min_score)
     return [{"cluster_id": i, "label": l, "count": c, "importance": round(a or 0), "bytes": b or 0,
              "gmail_total": t or c} for i, l, c, a, b, t in db.execute(q)]
 
@@ -183,15 +233,15 @@ def storage(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
 
 
 @app.get("/groups/{cluster_id}/messages")
-def group_messages(cluster_id: int, sender: str | None = None, label: str | None = None,
-                   db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def group_messages(cluster_id: int, since_days: int | None = None, date_from: date | None = None,
+                   date_to: date | None = None, sender: str | None = None, label: str | None = None,
+                   min_score: int = 0, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
     q = (select(Message, Score).join(MessageCluster, MessageCluster.message_id == Message.message_id)
          .outerjoin(Score, Score.message_id == Message.message_id)
-         .where(MessageCluster.cluster_id == cluster_id).order_by(Message.date.desc()))
-    if sender:
-        q = q.where(Message.sender == sender)
-    rows = [_row(m, s) for m, s in db.execute(q)]
-    return [r for r in rows if not label or label in r["labels"]]
+         .where(MessageCluster.cluster_id == cluster_id, Message.in_trash == False,  # noqa: E712
+                *_filters(since_days, date_from, date_to, sender, label, min_score))
+         .order_by(Message.date.desc()))
+    return [_row(m, s) for m, s in db.execute(q)]
 
 
 # ---------- actions ----------
