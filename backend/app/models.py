@@ -82,6 +82,13 @@ class Action(Base):
     undone: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class LlmUsage(Base):
+    """Calls made per day, to enforce the daily LLM cap."""
+    __tablename__ = "llm_usage"
+    day: Mapped[str] = mapped_column(String, primary_key=True)
+    calls: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class SyncState(Base):
     __tablename__ = "sync_state"
     id: Mapped[int] = mapped_column(primary_key=True)

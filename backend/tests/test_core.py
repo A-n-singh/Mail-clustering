@@ -91,6 +91,7 @@ from app.grouping import group_key, subject_key
 def test_subject_key_templates():
     assert subject_key("Re: Your order #12345 has shipped") == subject_key("Your order #99 has shipped")
     assert subject_key("Invoice INV-2024-001 due 5 May") == "invoice # due # may"
+    assert subject_key("Your order #12345 has shipped") == "your order # has shipped"
 
 
 def test_free_mail_groups_by_address_company_by_domain():

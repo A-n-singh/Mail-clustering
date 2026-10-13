@@ -1,0 +1,10 @@
+# Postgres for local/real use:  docker compose up -d db
+# then set DATABASE_URL=postgresql+psycopg://inbox:inbox@localhost:5432/inbox in backend/.env
+services:
+  db:
+    image: postgres:16
+    environment: { POSTGRES_USER: inbox, POSTGRES_PASSWORD: inbox, POSTGRES_DB: inbox }
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+volumes:
+  pgdata:

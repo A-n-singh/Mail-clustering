@@ -5,3 +5,17 @@ This depository is built to ease out the biggest problem of of every corporate i
 FastAPI + SQLAlchemy. Google sign-in (owner-only), Gmail sync, sender grouping, rule-based scoring,
 actions with Undo. Each cluster keeps at most `CLUSTER_CAP` (360) live mails; trashing refills it with older mail from the same sender. Run: `cd backend && pip install -r requirements.txt && cp .env.example .env && uvicorn app.main:app --reload`.
 Tests: `pytest`.
+
+## Run it
+```bash
+# backend
+cd backend && pip install -r requirements.txt && cp .env.example .env   # fill in Google + keys
+uvicorn app.main:app --reload
+# frontend
+cd frontend && npm install && npm run dev        # http://localhost:5173
+# try it with fake mail and no Google credentials
+cd backend && python demo.py                     # then open the frontend and click Sign in
+# Postgres instead of SQLite
+docker compose up -d db   # DATABASE_URL=postgresql+psycopg://inbox:inbox@localhost:5432/inbox
+```
+Tests: `cd backend && pytest` · `cd frontend && npm test`. Optional LLM pass: set `ANTHROPIC_API_KEY`.

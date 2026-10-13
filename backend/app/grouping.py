@@ -13,7 +13,7 @@ _PREFIX = re.compile(r"^((re|fwd?|fw)\s*:\s*)+", re.I)
 def subject_key(subject: str) -> str:
     """Subject template: 'Your order #12345 has shipped' -> 'your order # has shipped'."""
     s = _PREFIX.sub("", subject.strip().lower())
-    s = re.sub(r"\b[\w.-]*\d[\w.-]*\b", "#", s)  # anything containing a digit (ids, dates, amounts)
+    s = re.sub(r"#?\b[\w.-]*\d[\w.-]*\b", "#", s)  # anything containing a digit (ids, dates, amounts)
     return re.sub(r"\s+", " ", s).strip()[:120]
 
 

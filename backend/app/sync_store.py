@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from .cleaning import clean_body
 from .gmail import RawMail, parse_sender
 from .grouping import subject_key
+from . import llm
 from .models import Message, Score
 from .scoring import MODEL_VERSION, score_message
 
@@ -19,5 +20,9 @@ def store_raw(db: Session, raw: RawMail):
     m.is_bulk, m.list_unsubscribe, m.gmail_link = bulk, raw.list_unsubscribe, link
     db.merge(m)  # idempotent: re-running never duplicates rows
     cls, s, reason = score_message(sender, raw.subject, body, bulk, raw.labels)
+    if cls == "fyi" and not bulk:  # rules were not decisive -> optional LLM second opinion
+        refined = llm.classify(db, sender, raw.subject, body)
+        if refined:
+            cls, s, reason = refined
     db.merge(Score(message_id=raw.message_id, model_version=MODEL_VERSION,
                    cls=cls, importance_score=s, reason=reason))

@@ -114,7 +114,7 @@ def delete_account(db: Session = Depends(get_db), _: str = Depends(auth.current_
     owner = db.scalar(select(Owner))
     if owner:
         try:
-            httpx.post("https://oauth2.googleapis.com/revoke", params={"token": decrypt(owner.refresh_token_enc)})
+            httpx.post("https://oauth2.googleapis.com/revoke", params={"token": decrypt(owner.refresh_token_enc)}, timeout=5)
         except Exception:
             pass
     for t in reversed(Base.metadata.sorted_tables):
