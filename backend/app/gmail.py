@@ -19,10 +19,12 @@ class RawMail:
     is_html: bool = False
     list_unsubscribe: str | None = None
     headers: dict = field(default_factory=dict)
+    size_estimate: int = 0
 
 
 class GmailClient(Protocol):
-    def list_message_ids(self, days: int) -> list[str]: ...
+    def search(self, query: str, limit: int) -> tuple[list[str], int]:
+        """Newest-first ids matching a Gmail query, plus Gmail's total estimate."""
     def get_message(self, message_id: str) -> RawMail: ...
     def profile_history_id(self) -> str: ...
     def history_changes(self, start_history_id: str) -> tuple[list[str], list[str]] | None:
@@ -38,15 +40,17 @@ class GoogleGmailClient:
         from googleapiclient.discovery import build
         self.svc = build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
-    def list_message_ids(self, days):
-        ids, token = [], None
-        while True:
+    def search(self, query, limit):
+        ids, token, est = [], None, 0
+        while len(ids) < limit:
             r = self.svc.users().messages().list(
-                userId="me", q=f"newer_than:{days}d", pageToken=token, maxResults=500).execute()
+                userId="me", q=query, pageToken=token, maxResults=min(500, limit - len(ids))).execute()
+            est = r.get("resultSizeEstimate", est)
             ids += [m["id"] for m in r.get("messages", [])]
             token = r.get("nextPageToken")
             if not token:
-                return ids
+                break
+        return ids[:limit], est
 
     def get_message(self, message_id):
         m = self.svc.users().messages().get(userId="me", id=message_id, format="full").execute()
@@ -60,7 +64,7 @@ class GoogleGmailClient:
             date = datetime.fromtimestamp(int(m["internalDate"]) / 1000, timezone.utc)
         return RawMail(m["id"], m["threadId"], h.get("from", ""), h.get("subject", ""), date,
                        m.get("labelIds", []), m.get("snippet", ""), body, is_html,
-                       h.get("list-unsubscribe"), h)
+                       h.get("list-unsubscribe"), h, m.get("sizeEstimate", 0))
 
     def profile_history_id(self):
         return self.svc.users().getProfile(userId="me").execute()["historyId"]
@@ -119,8 +123,9 @@ def _extract_body(payload) -> tuple[str, bool]:
     return (plain, False) if plain else (html, True)
 
 
-def parse_sender(raw: str) -> tuple[str, str]:
-    """-> (display sender, domain)"""
+def parse_sender(raw: str) -> tuple[str, str, str]:
+    """-> (display name, email address, domain)"""
     name, addr = parseaddr(raw)
-    domain = addr.split("@")[-1].lower() if "@" in addr else ""
-    return (name or addr or raw), domain
+    addr = addr.lower()
+    domain = addr.split("@")[-1] if "@" in addr else ""
+    return (name or addr or raw), addr, domain

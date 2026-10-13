@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     # Only this Google account may sign in (single-owner app).
     owner_email: str = ""
-    backfill_days: int = 90
+    initial_fetch: int = 3000  # newest mails pulled on first sync
+    cluster_cap: int = 360  # max mails kept per cluster
 
 
 settings = Settings()

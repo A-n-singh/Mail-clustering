@@ -23,7 +23,11 @@ class Message(Base):
     message_id: Mapped[str] = mapped_column(String, primary_key=True)
     thread_id: Mapped[str] = mapped_column(String)
     sender: Mapped[str] = mapped_column(String, default="")
+    sender_email: Mapped[str] = mapped_column(String, default="")
     sender_domain: Mapped[str] = mapped_column(String, default="", index=True)
+    subject_key: Mapped[str] = mapped_column(String, default="", index=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    in_trash: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     subject: Mapped[str] = mapped_column(String, default="")
     body_clean: Mapped[str] = mapped_column(Text, default="")
     snippet: Mapped[str] = mapped_column(String, default="")
@@ -53,6 +57,8 @@ class Cluster(Base):
     size: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     run_id: Mapped[str] = mapped_column(String, default="sender")
+    gmail_query: Mapped[str] = mapped_column(String, default="")  # used to refill from Gmail
+    gmail_total: Mapped[int | None] = mapped_column(Integer, nullable=True)  # true count in Gmail
 
 
 class MessageCluster(Base):

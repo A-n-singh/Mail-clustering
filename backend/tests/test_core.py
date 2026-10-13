@@ -81,3 +81,52 @@ def test_custom_label(db):
     g = seeded(db)
     act.perform(db, g, ["1"], "label", "Follow up")
     assert "Label_Follow up" in db.get(Message, "1").labels
+
+
+# ---- capped clusters, refill, subject-first grouping ----
+from app.capacity import enforce_cap, refill
+from app.grouping import group_key, subject_key
+
+
+def test_subject_key_templates():
+    assert subject_key("Re: Your order #12345 has shipped") == subject_key("Your order #99 has shipped")
+    assert subject_key("Invoice INV-2024-001 due 5 May") == "invoice # due # may"
+
+
+def test_free_mail_groups_by_address_company_by_domain():
+    assert group_key("a@gmail.com", "gmail.com", "A")[0] == "a@gmail.com"
+    assert group_key("x@shop.com", "shop.com", "X") == ("shop.com", "from:shop.com")
+
+
+def test_subject_beats_body_in_scoring():
+    from app.scoring import score_message
+    # scary body, boring promo subject from a bulk sender -> still junk
+    assert score_message("Shop", "Big sale today", "urgent deadline asap", True, [])[0] == "junk"
+    assert score_message("Ann", "Action required: contract", "hi", False, [])[0] == "urgent"
+
+
+def test_cap_evicts_least_important_oldest_and_protects_urgent(db):
+    mails = [mail(f"n{i}", "Shop <d@shop.com>", f"Newsletter {i}", "x", unsub="<u>", day=i) for i in range(5)]
+    mails.append(mail("old-urgent", "Shop <d@shop.com>", "Final notice: deadline", "x", day=-50))
+    g = FakeGmail(mails)
+    run_sync(db, g)
+    enforce_cap(db, 3)
+    kept = {m.message_id for m in db.scalars(select(Message))}
+    assert "old-urgent" in kept            # protected even though oldest
+    assert "n0" not in kept and "n1" not in kept and "n4" in kept   # oldest low-score go first
+    assert len(kept) == 3
+    assert g.mails["n0"].labels == ["INBOX", "UNREAD"]            # Gmail untouched
+
+
+def test_trash_then_refill_pulls_older_mail(db):
+    mails = [mail(f"m{i}", "Shop <d@shop.com>", f"Hello {i}", "x", day=i) for i in range(6)]
+    g = FakeGmail(mails)
+    run_sync(db, g, cap=4)
+    cid = db.scalar(select(Cluster.cluster_id))
+    assert {m.message_id for m in db.scalars(select(Message))} == {"m2", "m3", "m4", "m5"}
+    act.perform(db, g, ["m5", "m4"], "trash", confirmed=True)
+    g.mails["m5"].labels = g.mails["m4"].labels = ["TRASH"]   # what Gmail would now report
+    assert refill(db, g, cid, 4) == 2
+    live = {m.message_id for m in db.scalars(select(Message)) if not m.in_trash}
+    assert live == {"m0", "m1", "m2", "m3"}
+    assert db.get(Cluster, cid).size == 4

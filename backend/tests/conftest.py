@@ -1,6 +1,6 @@
 import os
 os.environ.update(DATABASE_URL="sqlite://", OWNER_EMAIL="me@example.com", SESSION_SECRET="s")
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,7 +18,12 @@ class FakeGmail:
         self.changes = ([], [])
         self.calls = []
 
-    def list_message_ids(self, days): return list(self.mails)
+    def search(self, query, limit):
+        import re
+        want = re.search(r"from:(\S+)", query)
+        ids = [m.message_id for m in sorted(self.mails.values(), key=lambda m: m.date, reverse=True)
+               if "TRASH" not in m.labels and (not want or want.group(1) in m.sender)]
+        return ids[:limit], len(ids)
     def get_message(self, mid): return self.mails[mid]
     def profile_history_id(self): return self.history
     def history_changes(self, start): return self.changes
@@ -28,9 +33,9 @@ class FakeGmail:
     def ensure_label(self, name): return "Label_" + name
 
 
-def mail(i, sender="Bob <bob@acme.com>", subject="hi", body="hello", unsub=None, labels=("INBOX", "UNREAD")):
-    return RawMail(i, "t" + i, sender, subject, datetime(2026, 1, 1, tzinfo=timezone.utc),
-                   list(labels), body[:20], body, False, unsub, {})
+def mail(i, sender="Bob <bob@acme.com>", subject="hi", body="hello", unsub=None, labels=("INBOX", "UNREAD"), day=1, size=1000):
+    return RawMail(i, "t" + i, sender, subject, datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(days=day),
+                   list(labels), body[:20], body, False, unsub, {}, size)
 
 
 @pytest.fixture

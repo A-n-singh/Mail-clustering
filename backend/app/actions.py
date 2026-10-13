@@ -31,6 +31,7 @@ def _apply(db: Session, gmail: GmailClient, m: Message, action: str, param: str 
     if action == "trash":
         gmail.trash(m.message_id)
         labels = [x for x in labels if x != "INBOX"] + ["TRASH"]
+        m.in_trash = True
     elif action == "label":
         if not param:
             raise ActionError("label name required")
@@ -87,6 +88,7 @@ def undo(db: Session, gmail: GmailClient, batch_id: str) -> int:
         if add or rem:
             gmail.modify_labels(m.message_id, add, rem)
         m.labels = list(a.previous_labels)
+        m.in_trash = "TRASH" in m.labels
         a.undone = True
     db.commit()
     return len(rows)
