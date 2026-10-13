@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy>=2
+psycopg[binary]
+pydantic-settings
+beautifulsoup4
+cryptography
+itsdangerous
+google-auth
+google-auth-oauthlib
+google-api-python-client
+pytest
+httpx
