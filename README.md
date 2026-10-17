@@ -18,7 +18,7 @@ cd backend && python demo.py                     # then open the frontend and cl
 # Postgres instead of SQLite
 docker compose up -d db   # DATABASE_URL=postgresql+psycopg://inbox:inbox@localhost:5432/inbox
 ```
-Tests: `cd backend && pytest` · `cd frontend && npm test`. Optional LLM pass: set `ANTHROPIC_API_KEY`.
+Tests: `cd backend && pytest` · `cd frontend && npm test`.
 
 ### Permanent delete (optional)
 Off by default. Set `ALLOW_PERMANENT_DELETE=true` and sign in again: Google then asks for full-mailbox access

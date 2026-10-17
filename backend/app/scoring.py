@@ -1,6 +1,6 @@
 """Rule-based classifier + 0-100 importance score with a one-line reason.
 Looks at the sender name and subject FIRST; the body is only a fallback when those say nothing.
-An LLM pass can be layered on later; MODEL_VERSION lets old scores be kept."""
+MODEL_VERSION lets old scores be kept if the rules change."""
 import re
 
 MODEL_VERSION = "rules-v2"

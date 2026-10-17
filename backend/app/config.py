@@ -17,10 +17,6 @@ class Settings(BaseSettings):
     owner_email: str = ""
     initial_fetch: int = 3000  # newest mails pulled on first sync
     sync_interval_minutes: int = 20  # scheduled sync (15-30 min)
-    # Optional LLM pass (FR-07). Off unless a key is set. Only subject + first 1500 chars of body are sent.
-    anthropic_api_key: str = ""
-    llm_model: str = "claude-haiku-5-5"
-    llm_daily_cap: int = 300  # max LLM calls per day
     # Permanent delete of mail ALREADY IN TRASH. Off by default: turning it on makes sign-in ask Google for the
     # full-mailbox scope (https://mail.google.com/), which is the only scope that allows permanent deletion.
     allow_permanent_delete: bool = False
