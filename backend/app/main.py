@@ -14,7 +14,7 @@ from . import actions as act
 from . import auth
 from .config import settings
 from .db import Base, SessionLocal, engine, get_db
-from .gmail import GmailClient, GoogleGmailClient
+from .gmail import GmailClient, GoogleGmailClient, gmail_web_url
 from .models import Action, Cluster, Message, MessageCluster, MessageTopic, Owner, Score, SyncRun, Topic, TopicRun
 from .security import decrypt, encrypt
 from .capacity import refill
@@ -192,7 +192,7 @@ def sync_status(db: Session = Depends(get_db), _: str = Depends(auth.current_use
 # ---------- dashboard data ----------
 def _row(m: Message, s: Score | None):
     return {"message_id": m.message_id, "sender": m.sender, "subject": m.subject,
-            "date": m.date.isoformat(), "labels": m.labels, "gmail_link": m.gmail_link,
+            "date": m.date.isoformat(), "labels": m.labels, "gmail_link": gmail_web_url(m.thread_id, settings.owner_email),
             "list_unsubscribe": m.list_unsubscribe, "class": s.cls if s else None,
             "score": s.importance_score if s else None, "reason": s.reason if s else None}
 
