@@ -74,6 +74,11 @@ async def _scheduler():
         await asyncio.to_thread(_sync_job)
 
 
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+
 # ---------- sign-in ----------
 @app.get("/auth/login")
 def login():

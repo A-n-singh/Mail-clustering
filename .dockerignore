@@ -1,0 +1,6 @@
+.git
+backend
+scripts
+**/node_modules
+**/dist
+**/*.png
