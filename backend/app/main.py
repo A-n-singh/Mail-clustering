@@ -404,7 +404,8 @@ def message_detail(message_id: str, db: Session = Depends(get_db), _: str = Depe
     if not m:
         raise HTTPException(404, "not found")
     return {**_row(m, db.scalar(select(Score).where(Score.message_id == message_id))), "snippet": m.snippet,
-            "preview": m.body_clean[:600]}
+            "preview": m.body_clean[:600], "body": m.body_clean[:20000], "size_bytes": m.size_bytes,
+            "sender_email": m.sender_email}
 
 
 # ---------- permanent delete of mail already in Trash ----------

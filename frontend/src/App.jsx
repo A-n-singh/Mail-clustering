@@ -4,7 +4,7 @@ import Bubbles from "./Bubbles.jsx";
 import ClusterMap, { GREY, topicColor } from "./ClusterMap.jsx";
 import Hologram from "./Hologram.jsx";
 import Filters, { EMPTY } from "./Filters.jsx";
-import { ConfirmModal, MailRow } from "./MailList.jsx";
+import { ConfirmModal, MailRow, Reader, useMailBody } from "./MailList.jsx";
 
 function usePoll(fn, ms, deps = []) {
   const [data, setData] = useState(null);
@@ -218,10 +218,7 @@ function Drill({ group, filters, version, act, onBack }) {
       </div>
       {view === "mails" && (mails ? mails.map((m) => <MailRow key={m.message_id} m={m} selected={sel.has(m.message_id)} onSelect={toggle} onAct={act} />) : <p className="muted">Loading…</p>)}
       {view === "subjects" && (subjects || []).map((s) => (
-        <div className="row" key={s.subject}>
-          <div className="main"><div className="subj">{s.subject || "(no subject)"}</div><div className="meta">{s.count} mails · {fmtBytes(s.bytes)}</div></div>
-          <button onClick={() => setSel(new Set([...sel, ...s.message_ids]))}>Select all {s.count}</button>
-        </div>
+        <SubjectRow key={s.subject} s={s} onSelectAll={() => setSel(new Set([...sel, ...s.message_ids]))} />
       ))}
     </div>
   );
@@ -314,6 +311,24 @@ function TopicMap({ version, act }) {
           <p className="muted" style={{ whiteSpace: "pre-wrap" }}>{open.preview || open.snippet}</p>
         </div>
       )}
+    </div>
+  );
+}
+
+/** One subject pattern ("Your order # has shipped" x140): read one sample before deciding to trash them all. */
+function SubjectRow({ s, onSelectAll }) {
+  const { open, full, toggle } = useMailBody(s.message_ids[0]);
+  return (
+    <div className="row">
+      <div className="main">
+        <div className="subj" role="button" tabIndex={0} aria-expanded={open} onClick={toggle}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } }}>
+          <span className="chev">{open ? "▾" : "▸"}</span> {s.subject || "(no subject)"}
+        </div>
+        <div className="meta">{s.count} mails · {fmtBytes(s.bytes)} · click to read one sample</div>
+      </div>
+      <button onClick={onSelectAll}>Select all {s.count}</button>
+      {open && <Reader m={{}} full={full} />}
     </div>
   );
 }
