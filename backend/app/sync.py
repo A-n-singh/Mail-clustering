@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .cleaning import clean_body
 from .gmail import GmailClient, RawMail, parse_sender
 from .capacity import enforce_cap
+from .cleanup import delete_messages
 from .sync_store import store_raw
 from .grouping import regroup
 from .models import Message, MessageCluster, Score, SyncRun, SyncState
@@ -13,9 +14,7 @@ from .scoring import MODEL_VERSION, score_message
 
 
 def _remove(db: Session, ids: list[str]):
-    for table in (Score, MessageCluster):
-        db.execute(delete(table).where(table.message_id.in_(ids)))
-    db.execute(delete(Message).where(Message.message_id.in_(ids)))
+    delete_messages(db, ids)
 
 
 def sync_in_progress(db: Session, stale_minutes: int = 30) -> bool:

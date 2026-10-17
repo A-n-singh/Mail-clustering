@@ -3,6 +3,7 @@ When mails leave a cluster (trash/archive), older ones are pulled from Gmail to 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from .cleanup import delete_messages
 from .gmail import GmailClient
 from .grouping import regroup
 from .models import Cluster, Message, MessageCluster, Score
@@ -28,9 +29,7 @@ def enforce_cap(db: Session, cap: int):
             # least important first, then oldest; urgent / needs-reply are never evicted
             cand = sorted((r for r in rows if r.cls not in PROTECTED), key=lambda r: (r.importance_score or 0, r.date))
             ids = [r.message_id for r in cand[:excess]]
-            for t in (Score, MessageCluster):
-                db.execute(delete(t).where(t.message_id.in_(ids)))
-            db.execute(delete(Message).where(Message.message_id.in_(ids)))
+            delete_messages(db, ids)
         c.size = db.scalar(select(func.count()).select_from(MessageCluster)
                            .join(Message, Message.message_id == MessageCluster.message_id)
                            .where(MessageCluster.cluster_id == c.cluster_id, Message.in_trash == False))  # noqa: E712

@@ -8,6 +8,7 @@ import uuid
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from .cleanup import delete_messages
 from .gmail import GmailClient
 from .grouping import regroup
 from .models import Action, Message, MessageCluster, Score
@@ -42,9 +43,7 @@ def purge_trash(db: Session, gmail: GmailClient, message_ids: list[str] | None =
     ids = [m.message_id for m in safe]
     if ids:
         gmail.delete_permanently(ids)
-        for t in (Score, MessageCluster):
-            db.execute(delete(t).where(t.message_id.in_(ids)))
-        db.execute(delete(Message).where(Message.message_id.in_(ids)))
+        delete_messages(db, ids)
         regroup(db)
     db.commit()
     return {"deleted": len(ids), "bytes_freed": sum(m.size_bytes for m in safe),

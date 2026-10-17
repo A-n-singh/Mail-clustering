@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, LargeBinary, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -94,4 +94,43 @@ class SyncRun(Base):
     ended: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fetched: Mapped[int] = mapped_column(Integer, default=0)
     total: Mapped[int] = mapped_column(Integer, default=0)  # for the onboarding progress bar
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# ---------------- Phase 2: topic clusters ----------------
+class Embedding(Base):
+    """One local embedding per mail (float32 bytes). Built from sender name + subject + snippet."""
+    __tablename__ = "embeddings"
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.message_id"), primary_key=True)
+    model: Mapped[str] = mapped_column(String)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class Topic(Base):
+    __tablename__ = "topics"
+    topic_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    label: Mapped[str] = mapped_column(String, default="")
+    summary: Mapped[str] = mapped_column(String, default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class MessageTopic(Base):
+    """Topic membership + stored 2D map coordinates, so the dashboard only reads them (no live UMAP)."""
+    __tablename__ = "message_topic"
+    message_id: Mapped[str] = mapped_column(ForeignKey("messages.message_id"), primary_key=True)
+    topic_id: Mapped[int | None] = mapped_column(ForeignKey("topics.topic_id"), nullable=True)
+    x: Mapped[float] = mapped_column(Float)
+    y: Mapped[float] = mapped_column(Float)
+    is_noise: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class TopicRun(Base):
+    __tablename__ = "topic_runs"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    started: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    ended: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    messages: Mapped[int] = mapped_column(Integer, default=0)
+    topics: Mapped[int] = mapped_column(Integer, default=0)
+    noise: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

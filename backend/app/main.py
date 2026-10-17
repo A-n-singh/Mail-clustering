@@ -14,9 +14,10 @@ from . import auth
 from .config import settings
 from .db import Base, SessionLocal, engine, get_db
 from .gmail import GmailClient, GoogleGmailClient
-from .models import Action, Cluster, Message, MessageCluster, Owner, Score, SyncRun
+from .models import Action, Cluster, Message, MessageCluster, MessageTopic, Owner, Score, SyncRun, Topic, TopicRun
 from .security import decrypt, encrypt
 from .capacity import refill
+from . import topics as topics_mod
 from .purge import PurgeError, purge_trash, trash_summary
 from .sync import run_sync, sync_in_progress
 
@@ -59,7 +60,11 @@ def _sync_job():
             try:
                 run_sync(db, gmail, settings.initial_fetch, settings.cluster_cap)
             except Exception:
-                pass  # recorded in sync_runs.error; next run resumes
+                return  # recorded in sync_runs.error; next run resumes
+            try:
+                topics_mod.after_sync(db)  # weekly re-cluster, otherwise assign new mail to existing topics
+            except Exception:
+                db.rollback()  # topic problems (e.g. model not downloaded yet) must never break syncing
 
 
 async def _scheduler():
@@ -283,6 +288,83 @@ def action_log(db: Session = Depends(get_db), _: str = Depends(auth.current_user
     rows = db.scalars(select(Action).order_by(Action.action_id.desc()).limit(100))
     return [{"batch_id": a.batch_id, "message_id": a.message_id, "action": a.action,
              "timestamp": a.timestamp.isoformat(), "undone": a.undone} for a in rows]
+
+
+# ---------- Phase 2: topic clusters + map ----------
+def _live_topic_rows(db: Session):
+    return (select(MessageTopic, Message).join(Message, Message.message_id == MessageTopic.message_id)
+            .where(Message.in_trash == False))  # noqa: E712
+
+
+@app.get("/topics")
+def topics(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    q = (select(Topic.topic_id, Topic.label, Topic.summary, func.count(Message.message_id), func.avg(Score.importance_score))
+         .join(MessageTopic, MessageTopic.topic_id == Topic.topic_id)
+         .join(Message, Message.message_id == MessageTopic.message_id)
+         .outerjoin(Score, Score.message_id == Message.message_id)
+         .where(Message.in_trash == False).group_by(Topic.topic_id, Topic.label, Topic.summary))  # noqa: E712
+    noise = db.scalar(select(func.count()).select_from(MessageTopic).join(
+        Message, Message.message_id == MessageTopic.message_id)
+        .where(MessageTopic.topic_id.is_(None), Message.in_trash == False))  # noqa: E712
+    return {"topics": sorted(({"topic_id": i, "label": l, "summary": s, "count": c, "importance": round(a or 0)}
+                              for i, l, s, c, a in db.execute(q)), key=lambda t: -t["count"]), "noise": noise}
+
+
+@app.get("/map")
+def cluster_map(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    """Stored 2D coordinates only (no live UMAP). Compact keys: i=id, x, y, t=topic (null = review bucket), s=subject, f=sender."""
+    rows = db.execute(select(MessageTopic.message_id, MessageTopic.x, MessageTopic.y, MessageTopic.topic_id,
+                             Message.subject, Message.sender)
+                      .join(Message, Message.message_id == MessageTopic.message_id)
+                      .where(Message.in_trash == False).limit(100_000))  # noqa: E712
+    return {"points": [{"i": i, "x": round(x, 4), "y": round(y, 4), "t": t, "s": s, "f": f} for i, x, y, t, s, f in rows]}
+
+
+@app.get("/topics/status")
+def topics_status(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    run = db.scalar(select(TopicRun).order_by(TopicRun.id.desc()))
+    stale = datetime.now(timezone.utc) - timedelta(minutes=60)
+    running = bool(run and run.ended is None and (run.started if run.started.tzinfo else run.started.replace(tzinfo=timezone.utc)) > stale)
+    return {"running": running, "topics": run.topics if run else 0, "noise": run.noise if run else 0,
+            "messages": run.messages if run else 0, "error": run.error if run else None,
+            "min_messages": settings.topic_min_messages,
+            "last_run": run.ended.isoformat() if run and run.ended else None}
+
+
+def _recluster_job():
+    with SessionLocal() as db:
+        try:
+            topics_mod.recluster(db)
+        except Exception:
+            pass  # recorded in topic_runs.error
+
+
+@app.post("/topics/recluster")
+def topics_recluster(background: BackgroundTasks, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    if topics_status(db)["running"]:
+        return {"started": False, "reason": "already running"}
+    background.add_task(_recluster_job)
+    return {"started": True}
+
+
+@app.get("/topics/{topic_id}/messages")
+def topic_messages(topic_id: int, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    """topic_id 0 = the review bucket (mail that fits no topic), most important first (FR-23)."""
+    cond = MessageTopic.topic_id.is_(None) if topic_id == 0 else MessageTopic.topic_id == topic_id
+    q = (select(Message, Score).join(MessageTopic, MessageTopic.message_id == Message.message_id)
+         .outerjoin(Score, Score.message_id == Message.message_id)
+         .where(cond, Message.in_trash == False)  # noqa: E712
+         .order_by(Score.importance_score.desc(), Message.date.desc()).limit(500))
+    return [_row(m, s) for m, s in db.execute(q)]
+
+
+@app.get("/messages/{message_id}")
+def message_detail(message_id: str, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    m = db.get(Message, message_id)
+    if not m:
+        raise HTTPException(404, "not found")
+    return {**_row(m, db.scalar(select(Score).where(Score.message_id == message_id))), "snippet": m.snippet,
+            "preview": m.body_clean[:600]}
 
 
 # ---------- permanent delete of mail already in Trash ----------

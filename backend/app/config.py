@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     # Permanent delete of mail ALREADY IN TRASH. Off by default: turning it on makes sign-in ask Google for the
     # full-mailbox scope (https://mail.google.com/), which is the only scope that allows permanent deletion.
     allow_permanent_delete: bool = False
+    # Phase 2: topic clusters from local embeddings (nothing leaves this machine)
+    topics_enabled: bool = True
+    embed_model: str = "BAAI/bge-small-en-v1.5"
+    topic_min_cluster_size: int = 8
+    topic_min_messages: int = 30  # don't cluster tiny mailboxes
+    recluster_days: int = 7
     cluster_cap: int = 360  # max mails kept per cluster
 
 
