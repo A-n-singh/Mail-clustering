@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     topic_min_cluster_size: int = 8
     topic_min_messages: int = 30  # don't cluster tiny mailboxes
     recluster_days: int = 7
+    gmail_rate_per_sec: float = 8  # pace Gmail calls; Gmail limits quota units per minute per user
     cluster_cap: int = 360  # max mails kept per cluster
 
 
