@@ -65,8 +65,6 @@ class MessageCluster(Base):
     __tablename__ = "message_cluster"
     message_id: Mapped[str] = mapped_column(ForeignKey("messages.message_id"), primary_key=True)
     cluster_id: Mapped[int] = mapped_column(ForeignKey("clusters.cluster_id"))
-    umap_x: Mapped[float | None] = mapped_column(Float, nullable=True)  # Phase 2
-    umap_y: Mapped[float | None] = mapped_column(Float, nullable=True)  # Phase 2
     is_noise: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
