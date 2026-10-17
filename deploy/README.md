@@ -16,6 +16,8 @@ On duckdns.org create a name (e.g. `myinbox`) and set its IP to the VM's static 
 curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker $USER   # then log out and back in
 git clone <your-repo-url> smart-inbox && cd smart-inbox && git checkout claude/new-session-apraa9
 cd deploy
+# Tablet/no paste? In Google Cloud download the OAuth client as JSON, press UPLOAD FILE in the SSH window,
+# and configure.sh reads the Client ID and secret from it. Otherwise it asks for them.
 ./configure.sh           # asks 4 questions (domain, Gmail, Client ID, Client secret) and writes .env;
                          # it also generates TOKEN_KEY + SESSION_SECRET on this machine
 docker compose up -d --build        # first build takes several minutes
