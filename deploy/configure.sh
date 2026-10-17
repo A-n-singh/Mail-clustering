@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 clean() { echo "$1" | tr -d '[:space:]'; }
 read -rp "Your domain, e.g. myinbox.duckdns.org: " DOMAIN
-DOMAIN=$(clean "$DOMAIN"); DOMAIN=${DOMAIN#https://}; DOMAIN=${DOMAIN#http://}; DOMAIN=${DOMAIN%%/*}; DOMAIN=$(echo "$DOMAIN" | tr "A-Z" "a-z")
+DOMAIN=$(clean "$DOMAIN" | tr 'A-Z' 'a-z'); DOMAIN=${DOMAIN#https://}; DOMAIN=${DOMAIN#http://}; DOMAIN=${DOMAIN%%/*}
 read -rp "Your Gmail address (the only account allowed in): " OWNER; OWNER=$(clean "$OWNER")
 read -rp "Google Client ID: " CID; CID=$(clean "$CID")
 read -rsp "Google Client secret (typing is hidden): " SECRET; echo; SECRET=$(clean "$SECRET")
