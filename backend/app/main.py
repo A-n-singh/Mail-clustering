@@ -21,11 +21,13 @@ from .capacity import refill
 from . import control
 from . import topics as topics_mod
 from .purge import PurgeError, purge_trash, trash_summary
-from .sync import run_sync, sync_in_progress
+from .sync import close_orphan_runs, run_sync, sync_in_progress
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
+    with SessionLocal() as db:
+        close_orphan_runs(db)  # a restart mid-sync must not leave a phantom 'running' sync behind
     task = asyncio.create_task(_scheduler()) if settings.sync_interval_minutes > 0 else None
     yield
     if task:
@@ -55,10 +57,16 @@ def get_gmail(db: Session = Depends(get_db)) -> GmailClient:
     return gmail
 
 
-def _sync_job():
-    with SessionLocal() as db:
-        gmail = build_gmail(db)
-        if gmail and not sync_in_progress(db):
+def _sync_job(already_marked: bool = False):
+    if not already_marked:
+        if control.sync_active.is_set():
+            return
+        control.sync_active.set()
+    try:
+        with SessionLocal() as db:
+            gmail = build_gmail(db)
+            if not gmail:
+                return
             try:
                 run = run_sync(db, gmail, settings.initial_fetch, settings.cluster_cap)
             except Exception:
@@ -69,6 +77,8 @@ def _sync_job():
                 topics_mod.after_sync(db)  # weekly re-cluster, otherwise assign new mail to existing topics
             except Exception:
                 db.rollback()  # topic problems (e.g. model not downloaded yet) must never break syncing
+    finally:
+        control.sync_active.clear()
 
 
 async def _scheduler():
@@ -153,7 +163,8 @@ def sync(background: BackgroundTasks, db: Session = Depends(get_db), _: str = De
     """Start a sync in the background; poll /sync/status for progress."""
     if sync_in_progress(db):
         return {"started": False, "reason": "already running"}
-    background.add_task(_sync_job)
+    control.sync_active.set()  # claim it now so a double click cannot start two syncs
+    background.add_task(_sync_job, True)
     return {"started": True}
 
 
@@ -161,6 +172,7 @@ def sync(background: BackgroundTasks, db: Session = Depends(get_db), _: str = De
 def sync_stop(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
     """Stop the running sync as soon as possible. Mail already read is kept; Sync now continues from there."""
     if not sync_in_progress(db):
+        close_orphan_runs(db)  # heal a leftover "running" row from a restart
         return {"stopping": False, "reason": "no sync is running"}
     control.cancel_sync.set()
     return {"stopping": True}
@@ -352,8 +364,7 @@ def cluster_map(db: Session = Depends(get_db), _: str = Depends(auth.current_use
 @app.get("/topics/status")
 def topics_status(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
     run = db.scalar(select(TopicRun).order_by(TopicRun.id.desc()))
-    stale = datetime.now(timezone.utc) - timedelta(minutes=60)
-    running = bool(run and run.ended is None and (run.started if run.started.tzinfo else run.started.replace(tzinfo=timezone.utc)) > stale)
+    running = control.topics_active.is_set()
     return {"running": running, "topics": run.topics if run else 0, "noise": run.noise if run else 0,
             "messages": run.messages if run else 0, "error": run.error if run else None,
             "min_messages": settings.topic_min_messages,

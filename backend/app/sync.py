@@ -18,13 +18,24 @@ def _remove(db: Session, ids: list[str]):
     delete_messages(db, ids)
 
 
-def sync_in_progress(db: Session, stale_minutes: int = 30) -> bool:
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
+def sync_in_progress(db: Session | None = None) -> bool:
+    """True only while a sync is really running in this process (not just an unfinished row left by a restart)."""
+    return control.sync_active.is_set()
+
+
+def close_orphan_runs(db: Session) -> int:
+    """Mark sync/topic runs that were cut off by a restart as finished, so nothing looks stuck 'running'."""
+    from .models import TopicRun
+    n = 0
+    now_ = datetime.now(timezone.utc)
     for r in db.scalars(select(SyncRun).where(SyncRun.ended.is_(None))):
-        started = r.started if r.started.tzinfo else r.started.replace(tzinfo=timezone.utc)
-        if started > cutoff:
-            return True
-    return False
+        r.ended, r.error = now_, control.STOPPED
+        n += 1
+    for r in db.scalars(select(TopicRun).where(TopicRun.ended.is_(None))):
+        r.ended, r.error = now_, "interrupted by a restart"
+        n += 1
+    db.commit()
+    return n
 
 
 def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: int = 360) -> SyncRun:

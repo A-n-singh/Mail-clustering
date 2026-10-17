@@ -9,6 +9,7 @@ import numpy as np
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from . import control
 from .config import settings
 from .embeddings import Embedder, ensure_embeddings, get_embedder, load_matrix
 from .models import Message, MessageTopic, Score, Topic, TopicRun
@@ -67,6 +68,14 @@ def demote_outliers(X: np.ndarray, labels: np.ndarray, min_size: int, z: float =
 
 
 def recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
+    control.topics_active.set()  # the dashboard's "Rebuilding…" comes from this, never from a leftover database row
+    try:
+        return _recluster(db, embedder)
+    finally:
+        control.topics_active.clear()
+
+
+def _recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
     run = TopicRun()
     db.add(run)
     db.commit()

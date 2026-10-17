@@ -2,10 +2,24 @@ from app.models import SyncRun
 from app.sync import sync_in_progress
 
 
-def test_scheduler_job_skips_when_sync_running(db):
+def test_a_leftover_unfinished_row_is_not_a_running_sync(db):
+    """A restart mid-sync leaves an unfinished row behind. It must NOT look like a sync that is still running."""
     db.add(SyncRun())
     db.commit()
-    assert sync_in_progress(db) is True
+    assert sync_in_progress(db) is False
+    control_flag_on = __import__("app.control", fromlist=["x"]).sync_active
+    control_flag_on.set()
+    assert sync_in_progress(db) is True          # only a really running sync counts
+
+
+def test_orphan_runs_are_closed_on_startup_and_by_stop(db):
+    from app.models import TopicRun
+    from app.sync import close_orphan_runs
+    db.add(SyncRun()); db.add(TopicRun()); db.commit()
+    assert close_orphan_runs(db) == 2
+    assert all(r.ended is not None for r in db.scalars(select(SyncRun)))
+    assert all(r.ended is not None for r in db.scalars(select(TopicRun)))
+    assert close_orphan_runs(db) == 0
 
 
 def test_delete_account_erases_everything():
@@ -201,13 +215,17 @@ def test_stop_endpoint_and_status():
     assert c.post("/sync/stop").status_code == 401
     c.cookies.set("session", auth.make_session("me@example.com"))
     control.cancel_sync.clear()
-    assert c.post("/sync/stop").json()["stopping"] is False            # nothing running: nothing to stop
+    with S() as s:
+        s.add(SyncRun()); s.commit()                                    # a leftover row from a restart, nothing is running
+    assert c.get("/sync/status").json()["running"] is False             # the screen is not stuck on "Syncing…"
+    assert c.post("/sync/stop").json()["stopping"] is False             # nothing to stop...
     assert not control.cancel_sync.is_set()
     with S() as s:
-        s.add(SyncRun()); s.commit()                                    # a sync is "running"
+        assert s.query(SyncRun).first().ended is not None               # ...and Stop cleaned the leftover row
+    control.sync_active.set()                                           # now a sync REALLY runs
     assert c.post("/sync/stop").json() == {"stopping": True}
     assert control.cancel_sync.is_set()
-    control.cancel_sync.clear()
+    control.sync_active.clear(); control.cancel_sync.clear()
     with S() as s:
         r = s.query(SyncRun).first(); r.ended, r.error, r.fetched = __import__("datetime").datetime.now(), control.STOPPED, 40; s.commit()
     st = c.get("/sync/status").json()

@@ -62,11 +62,12 @@ gmail = DemoGmail()
 import tempfile
 from sqlalchemy.orm import sessionmaker
 # a real file database (not one shared in-memory connection), so the demo behaves like the real server
-eng = dbmod.make_engine("sqlite:///" + tempfile.mkdtemp() + "/demo.db")
+eng = dbmod.make_engine("sqlite:///" + os.environ.get("DEMO_DB", tempfile.mkdtemp() + "/demo.db"))  # DEMO_DB keeps data across restarts
 dbmod.Base.metadata.create_all(eng)
 S = sessionmaker(bind=eng, expire_on_commit=False)
 with S() as s:
-    s.add(Owner(id=1, email="demo@example.com", refresh_token_enc="x")); s.commit()
+    if not s.get(Owner, 1):
+        s.add(Owner(id=1, email="demo@example.com", refresh_token_enc="x")); s.commit()
 m.SessionLocal = S
 m.app.dependency_overrides[dbmod.get_db] = lambda: (yield from _gen())
 def _gen():
