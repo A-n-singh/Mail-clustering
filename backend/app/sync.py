@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from .cleaning import clean_body
 from .gmail import GmailClient, RawMail, parse_sender
+from . import control
 from .capacity import enforce_cap
 from .cleanup import delete_messages
 from .sync_store import store_raw
@@ -27,9 +28,11 @@ def sync_in_progress(db: Session, stale_minutes: int = 30) -> bool:
 
 
 def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: int = 360) -> SyncRun:
+    control.cancel_sync.clear()  # a Stop pressed for an earlier run must not cancel this one
     run = SyncRun()
     db.add(run)
     db.commit()
+    done = 0
     try:
         state = db.get(SyncState, 1) or SyncState(id=1)
         new_history = gmail.profile_history_id()
@@ -45,9 +48,14 @@ def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: in
         run.total = len(ids)
         db.commit()
         for n, mid in enumerate(ids, 1):
+            if control.cancel_sync.is_set():
+                raise control.SyncCancelled()
             store_raw(db, gmail.get_message(mid))
+            done = n
             if n % 25 == 0:
                 run.fetched = n
+                if n == 100 or n % 500 == 0:
+                    regroup(db)  # group as we go, so Groups/Grouped fill in during a long first sync
                 db.commit()  # lets /sync/status show progress
         if deleted:
             _remove(db, deleted)
@@ -56,6 +64,14 @@ def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: in
         enforce_cap(db, cap)
         state.history_id, state.last_sync = new_history, datetime.now(timezone.utc)
         db.merge(state)
+    except control.SyncCancelled:  # the owner pressed Stop: keep everything read so far, leave history_id so Sync resumes
+        db.commit()
+        regroup(db)
+        enforce_cap(db, cap)
+        run = db.merge(run)
+        run.fetched, run.error, run.ended = done, control.STOPPED, datetime.now(timezone.utc)
+        db.commit()
+        return run
     except Exception as e:  # leave history_id untouched so the next run resumes
         try:
             db.commit()  # keep every mail already read (a Gmail error is not a database error)

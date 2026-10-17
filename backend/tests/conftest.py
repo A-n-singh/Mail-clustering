@@ -50,3 +50,11 @@ def db():
     s = sessionmaker(bind=e, expire_on_commit=False)()
     yield s
     s.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_stop_flag():
+    from app import control
+    control.cancel_sync.clear()
+    yield
+    control.cancel_sync.clear()

@@ -43,7 +43,9 @@ class DemoGmail:
         ids = [x.message_id for x in sorted(self.mails.values(), key=lambda x: x.date, reverse=True)
                if "TRASH" not in x.labels and (not w or w.group(1) in x.sender)]
         return ids[:limit], len(ids)
-    def get_message(self, mid): return self.mails[mid]
+    def get_message(self, mid):
+        import time; time.sleep(float(os.environ.get('DEMO_DELAY', '0')))  # slow it down to watch progress
+        return self.mails[mid]
     def profile_history_id(self): return self.history
     def history_changes(self, start): return [], []
     def modify_labels(self, mid, add, rem):
@@ -57,11 +59,10 @@ class DemoGmail:
 
 
 gmail = DemoGmail()
-engine = dbmod.make_engine("sqlite://")
-engine.dispose()
-from sqlalchemy import create_engine
+import tempfile
 from sqlalchemy.orm import sessionmaker
-eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+# a real file database (not one shared in-memory connection), so the demo behaves like the real server
+eng = dbmod.make_engine("sqlite:///" + tempfile.mkdtemp() + "/demo.db")
 dbmod.Base.metadata.create_all(eng)
 S = sessionmaker(bind=eng, expire_on_commit=False)
 with S() as s:

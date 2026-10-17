@@ -18,6 +18,7 @@ from .gmail import GmailClient, GoogleGmailClient
 from .models import Action, Cluster, Message, MessageCluster, MessageTopic, Owner, Score, SyncRun, Topic, TopicRun
 from .security import decrypt, encrypt
 from .capacity import refill
+from . import control
 from . import topics as topics_mod
 from .purge import PurgeError, purge_trash, trash_summary
 from .sync import run_sync, sync_in_progress
@@ -59,9 +60,11 @@ def _sync_job():
         gmail = build_gmail(db)
         if gmail and not sync_in_progress(db):
             try:
-                run_sync(db, gmail, settings.initial_fetch, settings.cluster_cap)
+                run = run_sync(db, gmail, settings.initial_fetch, settings.cluster_cap)
             except Exception:
                 return  # recorded in sync_runs.error; next run resumes
+            if run.error == control.STOPPED:
+                return  # the owner stopped it: do not start the (long) topic build afterwards
             try:
                 topics_mod.after_sync(db)  # weekly re-cluster, otherwise assign new mail to existing topics
             except Exception:
@@ -154,11 +157,22 @@ def sync(background: BackgroundTasks, db: Session = Depends(get_db), _: str = De
     return {"started": True}
 
 
+@app.post("/sync/stop")
+def sync_stop(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    """Stop the running sync as soon as possible. Mail already read is kept; Sync now continues from there."""
+    if not sync_in_progress(db):
+        return {"stopping": False, "reason": "no sync is running"}
+    control.cancel_sync.set()
+    return {"stopping": True}
+
+
 @app.get("/sync/status")
 def sync_status(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
     run = db.scalar(select(SyncRun).order_by(SyncRun.id.desc()))
+    stopped = bool(run and run.error == control.STOPPED)
     return {"running": sync_in_progress(db), "fetched": run.fetched if run else 0,
-            "total": run.total if run else 0, "error": run.error if run else None,
+            "total": run.total if run else 0, "error": None if stopped else (run.error if run else None),
+            "stopped": stopped,
             "connected": db.scalar(select(Owner.id)) is not None,
             "last_sync": run.ended.isoformat() if run and run.ended else None}
 
