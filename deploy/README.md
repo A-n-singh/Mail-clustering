@@ -16,8 +16,8 @@ On duckdns.org create a name (e.g. `myinbox`) and set its IP to the VM's static 
 curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker $USER   # then log out and back in
 git clone <your-repo-url> smart-inbox && cd smart-inbox && git checkout claude/new-session-apraa9
 cd deploy
-./init-env.sh            # creates .env and generates TOKEN_KEY + SESSION_SECRET on this machine
-nano .env                # fill DOMAIN, OAUTH_REDIRECT_URI, FRONTEND_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OWNER_EMAIL
+./configure.sh           # asks 4 questions (domain, Gmail, Client ID, Client secret) and writes .env;
+                         # it also generates TOKEN_KEY + SESSION_SECRET on this machine
 docker compose up -d --build        # first build takes several minutes
 docker compose exec backend python -m app.doctor --model     # plain-language check
 ```
