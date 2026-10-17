@@ -50,3 +50,7 @@ exposed to the internet, only Caddy is (ports 80/443). Keep `.env` private (`chm
 ## If a sync fails with "rateLimitExceeded"
 Gmail limits how fast one account can be read. The app now paces its calls (`GMAIL_RATE_PER_SEC`, default 8 per second),
 waits and retries when Gmail says "slow down", and a first sync that stops resumes where it stopped. Just press **Sync now** again.
+
+## Stopping a sync
+Press **Stop** (next to "Syncing…") at any time. Mails already read are kept and grouped; the next **Sync now** continues
+where it stopped. Stopping also skips the long topic build that normally follows a sync.

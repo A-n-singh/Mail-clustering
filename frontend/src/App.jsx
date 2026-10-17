@@ -41,6 +41,13 @@ function Dashboard({ email }) {
   // while a sync runs, keep the header numbers live (every 4s) and refresh the open views (every 12s)
   const [summary] = usePoll(api.summary, status?.running ? 4000 : 0, [version, status?.running]);
   const refresh = () => setVersion((v) => v + 1);
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => { if (!status?.running) setStopping(false); }, [status?.running]);
+  async function stopSync() {
+    setStopping(true);
+    try { await api.stopSync(); } catch (e) { setStopping(false); setToast({ text: e.message }); }
+    reloadStatus();
+  }
   useEffect(() => {
     if (!status?.running) return;
     const t = setInterval(() => setVersion((v) => v + 1), 12000);
@@ -83,6 +90,7 @@ function Dashboard({ email }) {
           <button onClick={async () => { await api.startSync(); reloadStatus(); }} disabled={status?.running}>
             {status?.running ? "Syncing…" : "Sync now"}
           </button>{" "}
+          {status?.running && <><button className="danger" onClick={stopSync} disabled={stopping}>{stopping ? "Stopping…" : "Stop"}</button>{" "}</>}
           <button onClick={async () => { await api.logout(); location.reload(); }}>Sign out</button>
         </div>
       </header>
@@ -92,7 +100,11 @@ function Dashboard({ email }) {
           <b>{firstSync ? "Setting up your inbox…" : "Syncing…"}</b>
           <div className="bar"><div style={{ width: status.total ? `${(100 * status.fetched) / status.total}%` : "5%" }} /></div>
           <span className="muted">{status.fetched} of {status.total || "?"} mails read, then grouping</span>
+          <div className="muted" style={{ marginTop: 6 }}>{stopping ? "Stopping… mails already read are kept." : "You can press Stop at any time; mails already read are kept."}</div>
         </div>
+      )}
+      {!status?.running && status?.stopped && (
+        <p className="muted">Sync stopped. {status.fetched} mails from that run were kept. Press <b>Sync now</b> to continue where it stopped.</p>
       )}
       {status?.error && <p className="err">Last sync failed: {status.error}</p>}
       {!status?.running && summary?.total === 0 && (

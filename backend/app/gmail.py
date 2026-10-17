@@ -38,7 +38,9 @@ class GmailClient(Protocol):
         """IRREVERSIBLE. Callers must only pass mail that is already in Trash."""
 
 
-_sleep = time.sleep           # replaced in tests
+from .control import cancellable_sleep
+
+_sleep = cancellable_sleep    # waits for Gmail's quota are interruptible by Stop; replaced in tests
 _clock = time.monotonic
 _RETRY_WAITS = (5, 10, 20, 40, 60, 60)  # seconds; Gmail's per-minute quota needs real waiting, not milliseconds
 

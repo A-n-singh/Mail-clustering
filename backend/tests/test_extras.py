@@ -150,3 +150,65 @@ def test_mails_are_grouped_while_a_long_sync_is_still_running(db):
     run_sync(db, g, initial_fetch=1000)
     assert mid_sync["grouped"] >= 500                                  # grouping happened mid-sync
     assert len(list(db.scalars(select(MessageCluster)))) == 620        # and everything is grouped at the end
+
+
+# ---- Stop sync ----
+from app import control
+
+
+def test_stop_keeps_progress_groups_it_and_next_sync_resumes(db):
+    g = FakeGmail([mail(f"m{i}", f"S <s@co{i % 3}.com>", f"hello {i}") for i in range(12)])
+    real, calls = g.get_message, []
+    def stopping(mid):
+        calls.append(mid)
+        if len(calls) == 5:
+            control.cancel_sync.set()              # the owner presses Stop while mail #5 is being read
+        return real(mid)
+    g.get_message = stopping
+    run = run_sync(db, g)
+    assert run.error == control.STOPPED and run.ended is not None     # ended cleanly, not as a failure
+    assert len(list(db.scalars(select(Message)))) == 5                 # everything already read is kept
+    from app.models import MessageCluster, SyncState
+    assert len(list(db.scalars(select(MessageCluster)))) == 5          # and already grouped
+    assert db.get(SyncState, 1) is None                                # history not advanced, so Sync resumes
+    g.get_message, later = real, []
+    g.get_message = lambda mid: (later.append(mid), real(mid))[1]
+    assert run_sync(db, g).fetched == 7 and len(later) == 7            # only the 7 unread mails; Stop did not stick
+    assert len(list(db.scalars(select(Message)))) == 12
+
+
+def test_stop_interrupts_a_gmail_quota_wait_immediately():
+    control.cancel_sync.set()
+    with pytest.raises(control.SyncCancelled):
+        control.cancellable_sleep(60)                                  # would otherwise block for a minute
+    control.cancel_sync.clear()
+
+
+def test_stop_endpoint_and_status():
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app import auth
+    from app.db import Base, get_db
+    from app.main import app
+    from app.models import SyncRun
+    e = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(e)
+    S = sessionmaker(bind=e, expire_on_commit=False)
+    app.dependency_overrides[get_db] = lambda: S()
+    c = TestClient(app)
+    assert c.post("/sync/stop").status_code == 401
+    c.cookies.set("session", auth.make_session("me@example.com"))
+    control.cancel_sync.clear()
+    assert c.post("/sync/stop").json()["stopping"] is False            # nothing running: nothing to stop
+    assert not control.cancel_sync.is_set()
+    with S() as s:
+        s.add(SyncRun()); s.commit()                                    # a sync is "running"
+    assert c.post("/sync/stop").json() == {"stopping": True}
+    assert control.cancel_sync.is_set()
+    control.cancel_sync.clear()
+    with S() as s:
+        r = s.query(SyncRun).first(); r.ended, r.error, r.fetched = __import__("datetime").datetime.now(), control.STOPPED, 40; s.commit()
+    st = c.get("/sync/status").json()
+    assert st["stopped"] is True and st["error"] is None and st["running"] is False and st["fetched"] == 40

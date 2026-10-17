@@ -45,6 +45,7 @@ export const api = {
   digest: () => call("/digest"),
   syncStatus: () => call("/sync/status"),
   startSync: () => call("/sync", { method: "POST" }),
+  stopSync: () => call("/sync/stop", { method: "POST" }),
   preview: (ids) => call("/actions/preview", { method: "POST", body: { message_ids: ids, action: "trash" } }),
   act: (ids, action, param, confirmed = false) =>
     call("/actions", { method: "POST", body: { message_ids: ids, action, param, confirmed } }),
