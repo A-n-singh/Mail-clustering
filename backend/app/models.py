@@ -122,6 +122,7 @@ class MessageTopic(Base):
     topic_id: Mapped[int | None] = mapped_column(ForeignKey("topics.topic_id"), nullable=True)
     x: Mapped[float] = mapped_column(Float)
     y: Mapped[float] = mapped_column(Float)
+    z: Mapped[float] = mapped_column(Float, default=0.0)  # 3rd axis for the 3D hologram view
     is_noise: Mapped[bool] = mapped_column(Boolean, default=False)
 
 

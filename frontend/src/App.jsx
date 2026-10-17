@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, fmtBytes } from "./api.js";
 import Bubbles from "./Bubbles.jsx";
 import ClusterMap, { GREY, topicColor } from "./ClusterMap.jsx";
+import Hologram from "./Hologram.jsx";
 import Filters, { EMPTY } from "./Filters.jsx";
 import { ConfirmModal, MailRow } from "./MailList.jsx";
 
@@ -32,7 +33,7 @@ function Login() {
 }
 
 function Dashboard({ email }) {
-  const [tab, setTab] = useState("needs");
+  const [tab, setTab] = useState("map");
   const [toast, setToast] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [version, setVersion] = useState(0); // bump to refetch everything after an action
@@ -65,11 +66,11 @@ function Dashboard({ email }) {
   return (
     <div className="wrap">
       <header className="top">
-        <h2 style={{ margin: 0 }}>Smart Inbox</h2>
+        <div className="brand"><h2>Smart Inbox</h2><small><i />NEURAL MAIL CORE // ONLINE</small></div>
         <div className="stats" aria-label="summary">
-          <div className="stat"><b>{summary?.total ?? "–"}</b><span>total mails</span></div>
-          <div className="stat"><b>{summary?.grouped ?? "–"}</b><span>grouped</span></div>
-          <div className="stat"><b>{summary?.needs_review ?? "–"}</b><span>need review</span></div>
+          <Gauge label="total mails" value={summary?.total} max={summary?.total || 1} color="#00e5ff" decor />
+          <Gauge label="grouped" value={summary?.grouped} max={summary?.total || 1} color="#7cff6b" />
+          <Gauge label="need review" value={summary?.needs_review} max={summary?.total || 1} color="#ffb300" />
         </div>
         <div>
           <span className="muted">{email} </span>
@@ -112,6 +113,20 @@ function Dashboard({ email }) {
           onConfirm={() => doAct(confirm.ids, confirm.action, confirm.param, true).catch((e) => setToast({ text: e.message }))} />
       )}
       {toast && <Toast toast={toast} onClose={() => setToast(null)} onUndo={async () => { await api.undo(toast.batch); setToast({ text: "Undone" }); refresh(); }} />}
+    </div>
+  );
+}
+
+function Gauge({ label, value, max, color, decor }) {
+  const r = 26, c = 2 * Math.PI * r, f = value == null ? 0 : Math.min(1, value / Math.max(max, 1));
+  return (
+    <div className="gauge" style={{ color }}>
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <circle className="track" cx="32" cy="32" r={r} />
+        <circle className="val" cx="32" cy="32" r={r} strokeDasharray={c} strokeDashoffset={c * (1 - f)} />
+        {decor && <circle className="spin" cx="32" cy="32" r="31" />}
+      </svg>
+      <div><b>{value ?? "–"}</b><span>{label}</span></div>
     </div>
   );
 }
@@ -199,7 +214,7 @@ function TopicMap({ version, act }) {
   const [map, reloadMap] = usePoll(api.map, 0, [version]);
   const [status, reloadStatus] = usePoll(api.topicsStatus, 3000, [version]);
   const [focus, setFocus] = useState(null);   // topic id, 0 = review bucket, null = all
-  const [view, setView] = useState("map");     // map | list
+  const [view, setView] = useState("holo");    // holo | flat | list
   const [sel, setSel] = useState(new Set());
   const [open, setOpen] = useState(null);
   const [list] = usePoll(() => (view === "list" && focus != null ? api.topicMessages(focus) : Promise.resolve(null)), 0, [view, focus, version]);
@@ -229,7 +244,8 @@ function TopicMap({ version, act }) {
       {!noTopics && info && (
         <>
           <nav className="tabs">
-            <button className={view === "map" ? "on" : ""} onClick={() => setView("map")}>Map</button>
+            <button className={view === "holo" ? "on" : ""} onClick={() => setView("holo")}>Hologram 3D</button>
+            <button className={view === "flat" ? "on" : ""} onClick={() => setView("flat")}>Flat map</button>
             <button className={view === "list" ? "on" : ""} onClick={() => { setView("list"); if (focus == null) setFocus(topics[0]?.topic_id ?? 0); }}>List</button>
             <button disabled={status?.running} onClick={async () => { await api.recluster(); reloadStatus(); }}>{status?.running ? "Rebuilding…" : "Rebuild topics"}</button>
           </nav>
@@ -247,10 +263,18 @@ function TopicMap({ version, act }) {
         </>
       )}
 
-      {!noTopics && view === "map" && map && (
+      {!noTopics && (view === "holo" || view === "flat") && map && (
         <>
-          <ClusterMap points={points} topics={topics} focus={focus}
-            selected={sel} onSelect={setSel} onOpen={openMail} />
+          {view === "holo"
+            ? <Hologram points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} />
+            : <ClusterMap points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} />}
+          {focus != null && (
+            <div className="filters" style={{ marginTop: 10 }}>
+              <button onClick={() => setSel(new Set(points.filter((p) => (focus === 0 ? p.t == null : p.t === focus)).map((p) => p.i)))}>
+                Select all in this {focus === 0 ? "bucket" : "topic"}
+              </button>
+            </div>
+          )}
           {ids.length > 0 && (
             <div className="filters" style={{ marginTop: 10 }}>
               <b>{ids.length} selected</b>

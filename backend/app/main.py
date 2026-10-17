@@ -312,12 +312,13 @@ def topics(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
 
 @app.get("/map")
 def cluster_map(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
-    """Stored 2D coordinates only (no live UMAP). Compact keys: i=id, x, y, t=topic (null = review bucket), s=subject, f=sender."""
-    rows = db.execute(select(MessageTopic.message_id, MessageTopic.x, MessageTopic.y, MessageTopic.topic_id,
+    """Stored 2D coordinates only (no live UMAP). Compact keys: i=id, x, y, z, t=topic (null = review bucket), s=subject, f=sender."""
+    rows = db.execute(select(MessageTopic.message_id, MessageTopic.x, MessageTopic.y, MessageTopic.z, MessageTopic.topic_id,
                              Message.subject, Message.sender)
                       .join(Message, Message.message_id == MessageTopic.message_id)
                       .where(Message.in_trash == False).limit(100_000))  # noqa: E712
-    return {"points": [{"i": i, "x": round(x, 4), "y": round(y, 4), "t": t, "s": s, "f": f} for i, x, y, t, s, f in rows]}
+    return {"points": [{"i": i, "x": round(x, 4), "y": round(y, 4), "z": round(z or 0, 4), "t": t, "s": s, "f": f}
+                       for i, x, y, z, t, s, f in rows]}
 
 
 @app.get("/topics/status")

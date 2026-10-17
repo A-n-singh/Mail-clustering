@@ -85,7 +85,7 @@ def test_recluster_groups_by_topic_across_senders(db):
     t = db.get(Topic, topic_of(db, "m1") or topic_of(db, "m2"))
     assert "flight" in t.label or "booking" in t.label or "trip" in t.label
     assert t.size >= 5 and "mails" in t.summary
-    assert all(m.x is not None for m in db.scalars(select(MessageTopic)))   # coordinates stored (FR-25)
+    assert all(m.x is not None and m.z is not None for m in db.scalars(select(MessageTopic)))   # 3D coordinates stored (FR-25)
 
 
 def test_topic_ids_stay_stable_across_reclustering(db):
@@ -164,7 +164,7 @@ def test_topic_api():
     t = c.get("/topics").json()
     assert len(t["topics"]) >= 3 and sum(x["count"] for x in t["topics"]) + t["noise"] == 95
     pts = c.get("/map").json()["points"]
-    assert len(pts) == 95 and {"i", "x", "y", "t", "s", "f"} <= set(pts[0])
+    assert len(pts) == 95 and {"i", "x", "y", "z", "t", "s", "f"} <= set(pts[0])
     tid = t["topics"][0]["topic_id"]
     assert all(r["message_id"] for r in c.get(f"/topics/{tid}/messages").json())
     noise_rows = c.get("/topics/0/messages").json()

@@ -32,3 +32,8 @@ UMAP, clustered with HDBSCAN, and a mail that sits far from its own cluster goes
 the most distinctive words in the cluster (no LLM). 2D coordinates are stored, so the **Topic map** tab only reads them.
 New mail is placed into the nearest topic after every sync; topics are rebuilt weekly (`RECLUSTER_DAYS`) or with **Rebuild topics**.
 Topic IDs stay stable across rebuilds. Lasso-select dots to trash/archive/star in bulk (same confirm + Undo + protection rules).
+
+### Look and feel
+The dashboard uses a dark "HUD" theme. **Topic map → Hologram 3D** shows every mail as a glowing node in 3D, each topic wrapped in a
+rotating wireframe shell with a floating label. Drag to orbit, wheel to zoom, hover to scan a mail, click to open it, and use
+**Lasso** to select nodes for bulk actions. The flat 2D map and a plain list are one click away.

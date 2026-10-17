@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
 
-export const GREY = "#9a9a93";
-export const topicColor = (index, total) => d3.interpolateRainbow(total ? (index * 0.61803) % 1 : 0); // golden-ratio spacing keeps neighbours distinct
+import { holoColor } from "./Hologram.jsx";
+
+export const GREY = "#6b8794";
+export const topicColor = (index) => holoColor(index);
 
 const H = 560;
 
@@ -59,14 +61,14 @@ export default function ClusterMap({ points, topics, focus, selected, onSelect, 
       g.fill();
     }
     g.globalAlpha = 1;
-    g.lineWidth = 1.2; g.strokeStyle = "#111";
+    g.lineWidth = 1.4; g.strokeStyle = "#fff";
     for (const p of scaled.pts) {
       if (!selected.has(p.i)) continue;
       g.fillStyle = colorOf(p.t);
       g.beginPath(); g.arc(p.px * k + x, p.py * k + y, r + 1.5, 0, 6.2832); g.fill(); g.stroke();
     }
     if (poly.current?.length > 1) {
-      g.setLineDash([6, 4]); g.strokeStyle = "#2f6fed"; g.fillStyle = "rgba(47,111,237,.12)";
+      g.setLineDash([6, 4]); g.strokeStyle = "#00e5ff"; g.fillStyle = "rgba(0,229,255,.12)";
       g.beginPath(); poly.current.forEach(([a, b], i) => (i ? g.lineTo(a, b) : g.moveTo(a, b))); g.closePath(); g.fill(); g.stroke();
       g.setLineDash([]);
     }
@@ -115,7 +117,7 @@ export default function ClusterMap({ points, topics, focus, selected, onSelect, 
         <button onClick={() => { tf.current = d3.zoomIdentity; d3.select(canvas.current).call(d3.zoom().transform, d3.zoomIdentity); redraw(); }}>Reset view</button>
         <span className="muted">wheel = zoom · drag = pan · hover = subject · click = open</span>
       </div>
-      <canvas ref={canvas} style={{ width: "100%", height: H, touchAction: "none", cursor: lasso ? "crosshair" : tip ? "pointer" : "grab", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 8 }}
+      <canvas ref={canvas} style={{ width: "100%", height: H, touchAction: "none", cursor: lasso ? "crosshair" : tip ? "pointer" : "grab", background: "rgba(2,16,26,.85)", border: "1px solid var(--line)", borderRadius: 8 }}
         onPointerMove={onMove} onPointerDown={onDown} onPointerUp={onUp} onClick={onClick} onPointerLeave={() => setTip(null)} role="img" aria-label="Map of all mail by topic" />
       {tip && (
         <div className="tip" style={{ left: Math.min(tip.left + 12, size.w - 240), top: tip.top + 52 }}>

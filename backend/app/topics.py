@@ -81,10 +81,10 @@ def recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
         from sklearn.cluster import HDBSCAN
         nn = max(2, min(15, len(ids) - 1))
         Z = _reduce(X, min(10, len(ids) - 2), nn)
-        xy = _reduce(X, 2, nn)
+        xyz = _reduce(X, 3, nn)  # stored once; the flat map uses x,y and the hologram uses x,y,z
         labels = HDBSCAN(min_cluster_size=settings.topic_min_cluster_size).fit_predict(Z)
         labels = demote_outliers(X, labels, settings.topic_min_cluster_size)
-        _store(db, run, ids, xy, labels)
+        _store(db, run, ids, xyz, labels)
     except Exception as e:
         db.rollback()
         run = db.merge(run)
@@ -94,7 +94,7 @@ def recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
     return run
 
 
-def _store(db: Session, run: TopicRun, ids: list[str], xy: np.ndarray, labels: np.ndarray):
+def _store(db: Session, run: TopicRun, ids: list[str], xyz: np.ndarray, labels: np.ndarray):
     msgs = {m.message_id: m for m in db.scalars(select(Message).where(Message.message_id.in_(ids)))}
     members: dict[int, list[str]] = defaultdict(list)
     for mid, lab in zip(ids, labels):
@@ -131,7 +131,7 @@ def _store(db: Session, run: TopicRun, ids: list[str], xy: np.ndarray, labels: n
     for i, (mid, lab) in enumerate(zip(ids, labels)):
         t = topic_of.get(int(lab))
         db.add(MessageTopic(message_id=mid, topic_id=t.topic_id if t else None,
-                            x=float(xy[i][0]), y=float(xy[i][1]), is_noise=t is None))
+                            x=float(xyz[i][0]), y=float(xyz[i][1]), z=float(xyz[i][2]), is_noise=t is None))
     for t in db.scalars(select(Topic).where(Topic.topic_id.not_in(claimed) if claimed else True)):
         db.delete(t)
     run.topics, run.noise = len(topic_of), int((labels < 0).sum())
@@ -154,7 +154,7 @@ def assign_new(db: Session, embedder: Embedder | None = None, k: int = 5, min_si
     new_ids, Xn = [new_ids[i] for i in keep], Xn[keep]
     mt = {r.message_id: r for r in db.scalars(select(MessageTopic).where(MessageTopic.message_id.in_(base_ids)))}
     bt = [mt[m] for m in base_ids]
-    coords = np.array([[r.x, r.y] for r in bt])
+    coords = np.array([[r.x, r.y, r.z] for r in bt])
     for s in range(0, len(new_ids), 512):
         sims = Xn[s:s + 512] @ Xb.T
         for row, mid in zip(sims, new_ids[s:s + 512]):
@@ -165,8 +165,8 @@ def assign_new(db: Session, embedder: Embedder | None = None, k: int = 5, min_si
                     votes[bt[j].topic_id] += float(row[j])
             tid = votes.most_common(1)[0][0] if votes and row[top[0]] >= min_sim and \
                 votes.most_common(1)[0][1] > 0.5 * sum(float(row[j]) for j in top) else None
-            x, y = coords[top].mean(axis=0)
-            db.add(MessageTopic(message_id=mid, topic_id=tid, x=float(x), y=float(y), is_noise=tid is None))
+            x, y, z = coords[top].mean(axis=0)
+            db.add(MessageTopic(message_id=mid, topic_id=tid, x=float(x), y=float(y), z=float(z), is_noise=tid is None))
     db.flush()
     refresh_sizes(db)
     db.commit()
