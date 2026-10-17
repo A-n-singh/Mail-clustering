@@ -1,8 +1,9 @@
 import asyncio
+import hmac
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -83,17 +84,24 @@ def health():
 @app.get("/auth/login")
 def login():
     flow = auth.build_flow()
-    url, _ = flow.authorization_url(access_type="offline", prompt="consent")
-    return RedirectResponse(url)
+    url, state = flow.authorization_url(access_type="offline", prompt="consent")
+    resp = RedirectResponse(url)
+    resp.set_cookie(auth.OAUTH_COOKIE, auth.make_oauth_cookie(state, flow.code_verifier), httponly=True,
+                    secure=settings.frontend_url.startswith("https"), samesite="lax", max_age=600)
+    return resp
 
 
 @app.get("/auth/callback")
-def callback(code: str, db: Session = Depends(get_db)):
-    from google.auth.transport.requests import Request
+def callback(code: str, state: str, request: Request, db: Session = Depends(get_db)):
+    from google.auth.transport.requests import Request as GoogleRequest
     from google.oauth2 import id_token
+    saved = auth.read_oauth_cookie(request.cookies.get(auth.OAUTH_COOKIE))
+    if not hmac.compare_digest(saved["state"], state):
+        raise HTTPException(400, "Sign-in state does not match. Press Sign in with Google again.")
     flow = auth.build_flow()
+    flow.code_verifier = saved["verifier"]  # PKCE: must be the same one used to start the sign-in
     flow.fetch_token(code=code)
-    info = id_token.verify_oauth2_token(flow.credentials.id_token, Request(), settings.google_client_id)
+    info = id_token.verify_oauth2_token(flow.credentials.id_token, GoogleRequest(), settings.google_client_id)
     email = info["email"]
     if not auth.is_allowed(email):
         raise HTTPException(403, "This account is not allowed")
@@ -101,6 +109,7 @@ def callback(code: str, db: Session = Depends(get_db)):
         db.merge(Owner(id=1, email=email, refresh_token_enc=encrypt(flow.credentials.refresh_token)))
         db.commit()
     resp = RedirectResponse(settings.frontend_url)
+    resp.delete_cookie(auth.OAUTH_COOKIE)
     resp.set_cookie(auth.COOKIE, auth.make_session(email), httponly=True, secure=settings.frontend_url.startswith("https"),
                     samesite="lax", max_age=auth.MAX_AGE)
     return resp
