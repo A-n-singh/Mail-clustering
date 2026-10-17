@@ -117,3 +117,21 @@ def test_real_google_client_routes_every_call_through_pacing(monkeypatch):
     assert type(req).__name__ == "PacedRequest"
     assert req.execute() == "RESULT" and seen == ["paced"]
     assert g.svc.users().getProfile(userId="me").execute() == "RESULT"      # a different call type is paced too
+
+
+def test_header_total_matches_the_groups_below_even_after_a_failed_sync(db):
+    """The header counts every stored mail; the groups/bubbles must add up to exactly the same number."""
+    from app.models import Cluster, MessageCluster
+    g = FakeGmail([mail(f"m{i}", f"S{i} <s{i}@co{i % 3}.com>", f"hello {i}") for i in range(10)])
+    real, n = g.get_message, []
+    def failing(mid):
+        if len(n) == 7:
+            raise http_error(403, "rateLimitExceeded")
+        n.append(mid); return real(mid)
+    g.get_message = failing
+    with pytest.raises(HttpError):
+        run_sync(db, g)
+    stored = len(list(db.scalars(select(Message))))
+    clustered = len(list(db.scalars(select(MessageCluster))))
+    assert stored == 7 and clustered == stored                         # nothing stored but left ungrouped
+    assert sum(c.size for c in db.scalars(select(Cluster))) == stored  # and the group sizes add up
