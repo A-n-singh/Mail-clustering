@@ -1,5 +1,6 @@
 """Gmail access behind a small interface so sync/actions can be tested with a fake."""
 import base64
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parseaddr, parsedate_to_datetime
@@ -37,10 +38,65 @@ class GmailClient(Protocol):
         """IRREVERSIBLE. Callers must only pass mail that is already in Trash."""
 
 
+_sleep = time.sleep           # replaced in tests
+_clock = time.monotonic
+_RETRY_WAITS = (5, 10, 20, 40, 60, 60)  # seconds; Gmail's per-minute quota needs real waiting, not milliseconds
+
+
+def is_retryable(err) -> bool:
+    """Gmail says 'slow down' with 429, 5xx, or 403 + rateLimitExceeded / quota text."""
+    status = getattr(getattr(err, "resp", None), "status", 0)
+    if status in (429, 500, 502, 503, 504):
+        return True
+    text = str(err) + " " + (getattr(err, "content", b"") or b"").decode("utf-8", "ignore")
+    return status == 403 and any(k in text for k in ("rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "Quota exceeded"))
+
+
+class _Pacer:
+    """Spaces Gmail calls at most `rate` per second so a big first sync does not trip the per-minute quota."""
+    def __init__(self):
+        self.next_at = 0.0
+
+    def wait(self, rate: float):
+        gap = 1.0 / max(rate, 0.1)
+        now = _clock()
+        if now < self.next_at:
+            _sleep(self.next_at - now)
+        self.next_at = max(now, self.next_at) + gap
+
+
+_pacer = _Pacer()
+
+
+def paced_call(fn, rate: float | None = None):
+    """Run one Gmail request: paced, and retried with growing waits when Gmail asks us to slow down."""
+    from googleapiclient.errors import HttpError
+    from .config import settings
+    rate = rate or settings.gmail_rate_per_sec
+    for attempt in range(len(_RETRY_WAITS) + 1):
+        _pacer.wait(rate)
+        try:
+            return fn()
+        except HttpError as e:
+            if attempt == len(_RETRY_WAITS) or not is_retryable(e):
+                raise
+            _sleep(_RETRY_WAITS[attempt])
+
+
+def _paced_request_class():
+    from googleapiclient.http import HttpRequest
+
+    class PacedRequest(HttpRequest):
+        def execute(self, http=None, num_retries=0):
+            return paced_call(lambda: super(PacedRequest, self).execute(http=http, num_retries=num_retries))
+    return PacedRequest
+
+
 class GoogleGmailClient:
     def __init__(self, credentials):
         from googleapiclient.discovery import build
-        self.svc = build("gmail", "v1", credentials=credentials, cache_discovery=False)
+        self.svc = build("gmail", "v1", credentials=credentials, cache_discovery=False,
+                         requestBuilder=_paced_request_class())  # every call is paced and retried
 
     def search(self, query, limit):
         ids, token, est = [], None, 0

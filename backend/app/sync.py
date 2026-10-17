@@ -36,6 +36,10 @@ def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: in
         changes = gmail.history_changes(state.history_id) if state.history_id else None
         if changes is None:  # first run, or history ID expired -> full (re)sync
             ids, deleted = gmail.search("-in:trash -in:spam", initial_fetch)[0], []
+            if not state.history_id:  # an interrupted FIRST sync: skip mail already stored so it resumes where it stopped
+                have = set(db.scalars(select(Message.message_id)))
+                ids = [i for i in ids if i not in have]
+            # (expired history: re-read everything, so labels changed elsewhere are refreshed)
         else:
             ids, deleted = changes
         run.total = len(ids)
@@ -53,7 +57,16 @@ def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: in
         state.history_id, state.last_sync = new_history, datetime.now(timezone.utc)
         db.merge(state)
     except Exception as e:  # leave history_id untouched so the next run resumes
-        db.rollback()
+        try:
+            db.commit()  # keep every mail already read (a Gmail error is not a database error)
+        except Exception:
+            db.rollback()
+        try:  # show what we did manage to read, instead of an empty dashboard
+            regroup(db)
+            enforce_cap(db, cap)
+            db.commit()
+        except Exception:
+            db.rollback()
         run = db.merge(run)
         run.error = str(e)
         run.ended = datetime.now(timezone.utc)

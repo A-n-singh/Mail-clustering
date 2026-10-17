@@ -46,3 +46,7 @@ Keep `ALLOW_PERMANENT_DELETE=false` until you have looked at your real clusters.
 ## Safety
 Only the account in `OWNER_EMAIL` can sign in. The Google token is stored encrypted with `TOKEN_KEY`. The backend is not
 exposed to the internet, only Caddy is (ports 80/443). Keep `.env` private (`chmod 600`, already done by `init-env.sh`).
+
+## If a sync fails with "rateLimitExceeded"
+Gmail limits how fast one account can be read. The app now paces its calls (`GMAIL_RATE_PER_SEC`, default 8 per second),
+waits and retries when Gmail says "slow down", and a first sync that stops resumes where it stopped. Just press **Sync now** again.
