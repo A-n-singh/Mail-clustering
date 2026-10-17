@@ -51,3 +51,10 @@ nav.tabs button.on { background: var(--accent); color: #fff; border-color: var(-
 a.btn { display: inline-block; text-decoration: none; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; }
 a.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 a.btn.small { font-size: 12px; padding: 2px 7px; }
+.tip { position: absolute; pointer-events: none; background: var(--text); color: var(--bg); padding: 6px 10px; border-radius: 6px; font-size: 13px; max-width: 230px; z-index: 5; }
+.tip .muted { color: var(--bg); opacity: .7; }
+.topic-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.topic-legend button { display: inline-flex; align-items: center; gap: 6px; }
+.topic-legend button.on { border-color: var(--accent); background: var(--line); }
+.topic-legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.sidepanel { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-top: 10px; background: var(--panel); }

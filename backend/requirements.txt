@@ -11,3 +11,7 @@ google-auth-oauthlib
 google-api-python-client
 pytest
 httpx
+fastembed
+umap-learn
+scikit-learn
+numpy

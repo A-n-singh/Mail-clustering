@@ -24,3 +24,11 @@ Tests: `cd backend && pytest` · `cd frontend && npm test`.
 Off by default. Set `ALLOW_PERMANENT_DELETE=true` and sign in again: Google then asks for full-mailbox access
 (`https://mail.google.com/`), the only scope that allows it. The **Trash** tab can then delete mail that is already in
 Trash, after you type `DELETE FOREVER`. Mail restored since the last sync is skipped. Without it, Gmail empties Trash after 30 days.
+
+## Phase 2: topic clusters and the map
+Mail is also grouped **by topic across senders**. Each mail is turned into a vector by a small sentence model that runs
+**on this machine** (`fastembed`, ~130 MB downloaded on first use; nothing is sent anywhere, no LLM). Vectors are reduced with
+UMAP, clustered with HDBSCAN, and a mail that sits far from its own cluster goes to the **review bucket**. Topic names are
+the most distinctive words in the cluster (no LLM). 2D coordinates are stored, so the **Topic map** tab only reads them.
+New mail is placed into the nearest topic after every sync; topics are rebuilt weekly (`RECLUSTER_DAYS`) or with **Rebuild topics**.
+Topic IDs stay stable across rebuilds. Lasso-select dots to trash/archive/star in bulk (same confirm + Undo + protection rules).

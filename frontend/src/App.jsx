@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, fmtBytes } from "./api.js";
 import Bubbles from "./Bubbles.jsx";
+import ClusterMap, { GREY, topicColor } from "./ClusterMap.jsx";
 import Filters, { EMPTY } from "./Filters.jsx";
 import { ConfirmModal, MailRow } from "./MailList.jsx";
 
@@ -92,13 +93,14 @@ function Dashboard({ email }) {
       )}
 
       <nav className="tabs">
-        {[["needs", "Needs action"], ["groups", "Groups"], ["digest", "Daily digest"], ["storage", "Storage"], ["trash", "Trash"], ["log", "Action log"], ["settings", "Account"]].map(([k, l]) => (
+        {[["needs", "Needs action"], ["groups", "Groups"], ["map", "Topic map"], ["digest", "Daily digest"], ["storage", "Storage"], ["trash", "Trash"], ["log", "Action log"], ["settings", "Account"]].map(([k, l]) => (
           <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>
         ))}
       </nav>
 
       {tab === "needs" && <NeedsAction version={version} act={act} />}
       {tab === "groups" && <Groups version={version} act={act} />}
+      {tab === "map" && <TopicMap version={version} act={act} />}
       {tab === "digest" && <Digest version={version} />}
       {tab === "storage" && <Storage version={version} />}
       {tab === "trash" && <Trash version={version} onDone={(text) => { setToast({ text }); refresh(); }} />}
@@ -188,6 +190,88 @@ function Drill({ group, filters, version, act, onBack }) {
           <button onClick={() => setSel(new Set([...sel, ...s.message_ids]))}>Select all {s.count}</button>
         </div>
       ))}
+    </div>
+  );
+}
+
+function TopicMap({ version, act }) {
+  const [info, reloadInfo] = usePoll(api.topics, 0, [version]);
+  const [map, reloadMap] = usePoll(api.map, 0, [version]);
+  const [status, reloadStatus] = usePoll(api.topicsStatus, 3000, [version]);
+  const [focus, setFocus] = useState(null);   // topic id, 0 = review bucket, null = all
+  const [view, setView] = useState("map");     // map | list
+  const [sel, setSel] = useState(new Set());
+  const [open, setOpen] = useState(null);
+  const [list] = usePoll(() => (view === "list" && focus != null ? api.topicMessages(focus) : Promise.resolve(null)), 0, [view, focus, version]);
+  useEffect(() => { setSel(new Set()); setOpen(null); }, [version]);
+  const wasRunning = useRef(false);
+  useEffect(() => { if (wasRunning.current && status && !status.running) { reloadInfo(); reloadMap(); } wasRunning.current = !!status?.running; }, [status, reloadInfo, reloadMap]);
+
+  const topics = info?.topics ?? [];
+  const points = map?.points ?? [];
+  const noTopics = info && !topics.length;
+  const color = (t, i) => (t == null ? GREY : topicColor(i, topics.length));
+
+  async function openMail(id) { setOpen(await api.message(id)); }
+  const ids = [...sel];
+
+  return (
+    <div className="card">
+      {noTopics && (
+        <p>
+          {status?.running ? "Building topics…" : status?.messages && status.messages < status.min_messages
+            ? `Only ${status.messages} mails so far; topics need at least ${status.min_messages}.`
+            : "No topics yet. They are built automatically every week; you can build them now."}{" "}
+          <button disabled={status?.running} onClick={async () => { await api.recluster(); reloadStatus(); }}>Build topics now</button>
+          {status?.error && <span className="err"> Last run failed: {status.error}</span>}
+        </p>
+      )}
+      {!noTopics && info && (
+        <>
+          <nav className="tabs">
+            <button className={view === "map" ? "on" : ""} onClick={() => setView("map")}>Map</button>
+            <button className={view === "list" ? "on" : ""} onClick={() => { setView("list"); if (focus == null) setFocus(topics[0]?.topic_id ?? 0); }}>List</button>
+            <button disabled={status?.running} onClick={async () => { await api.recluster(); reloadStatus(); }}>{status?.running ? "Rebuilding…" : "Rebuild topics"}</button>
+          </nav>
+          <div className="topic-legend" role="group" aria-label="Topics">
+            <button className={focus == null ? "on" : ""} onClick={() => setFocus(null)}>All ({points.length})</button>
+            {topics.map((t, i) => (
+              <button key={t.topic_id} className={focus === t.topic_id ? "on" : ""} title={t.summary} onClick={() => setFocus(focus === t.topic_id ? null : t.topic_id)}>
+                <i style={{ background: color(t.topic_id, i) }} />{t.label} ({t.count})
+              </button>
+            ))}
+            <button className={focus === 0 ? "on" : ""} title="Mail that fits no topic, most important first" onClick={() => setFocus(focus === 0 ? null : 0)}>
+              <i style={{ background: GREY }} />Review bucket ({info.noise})
+            </button>
+          </div>
+        </>
+      )}
+
+      {!noTopics && view === "map" && map && (
+        <>
+          <ClusterMap points={points} topics={topics} focus={focus}
+            selected={sel} onSelect={setSel} onOpen={openMail} />
+          {ids.length > 0 && (
+            <div className="filters" style={{ marginTop: 10 }}>
+              <b>{ids.length} selected</b>
+              {ids.length > 1
+                ? ["trash", "archive", "mark_read", "star"].map((a) => <button key={a} className={a === "trash" ? "danger" : ""} onClick={() => act(ids, a)}>{a.replace("_", " ")}</button>)
+                : <span className="muted">select at least 2 for a bulk action</span>}
+              <button onClick={() => setSel(new Set())}>Clear</button>
+            </div>
+          )}
+        </>
+      )}
+
+      {!noTopics && view === "list" && (list ? list.map((m) => <MailRow key={m.message_id} m={m} onAct={act} />) : <p className="muted">Loading…</p>)}
+
+      {open && (
+        <div className="sidepanel" role="region" aria-label="Mail">
+          <button onClick={() => setOpen(null)} style={{ float: "right" }}>✕</button>
+          <MailRow m={open} onAct={act} />
+          <p className="muted" style={{ whiteSpace: "pre-wrap" }}>{open.preview || open.snippet}</p>
+        </div>
+      )}
     </div>
   );
 }
