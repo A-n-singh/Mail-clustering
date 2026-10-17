@@ -18,6 +18,21 @@ def _signer():
     return URLSafeTimedSerializer(settings.session_secret, salt="session")
 
 
+OAUTH_COOKIE = "oauth"
+
+
+def make_oauth_cookie(state: str, verifier: str | None) -> str:
+    """Remembers the sign-in's state (CSRF check) and PKCE verifier between /auth/login and /auth/callback."""
+    return URLSafeTimedSerializer(settings.session_secret, salt="oauth").dumps({"state": state, "verifier": verifier})
+
+
+def read_oauth_cookie(value: str | None) -> dict:
+    try:
+        return URLSafeTimedSerializer(settings.session_secret, salt="oauth").loads(value or "", max_age=600)
+    except BadSignature:
+        raise HTTPException(400, "Sign-in expired or was not started here. Press Sign in with Google again.")
+
+
 def make_session(email: str) -> str:
     return _signer().dumps({"email": email})
 

@@ -1,0 +1,26 @@
+# One address serves everything:
+#   /auth/*  -> backend (Google sign-in; this is the redirect URI you give Google)
+#   /api/*   -> backend (the dashboard's data; the /api prefix is removed)
+#   anything else -> the dashboard files
+# DOMAIN=myinbox.duckdns.org  -> automatic HTTPS.   DOMAIN=:80 -> plain http (local testing only)
+{$DOMAIN:localhost} {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	handle /auth/* {
+		reverse_proxy backend:8000
+	}
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
