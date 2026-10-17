@@ -174,3 +174,27 @@ def test_topic_api():
     assert st["running"] is False and st["topics"] >= 3
     c.post("/actions", json={"message_ids": ["m1"], "action": "trash"})
     assert len(c.get("/map").json()["points"]) == 94           # trashed mail leaves the map
+
+
+def test_message_endpoint_returns_the_full_cleaned_text_for_the_reader(db):
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app import auth
+    from app.db import Base, get_db
+    from app.main import app
+    e = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(e)
+    S = sessionmaker(bind=e, expire_on_commit=False)
+    long_body = "Line one of the job alert.\n" + ("More text about architect jobs. " * 60)
+    with S() as s:
+        run_sync(s, FakeGmail([mail("r1", "Indeed <alert@jobalert.indeed.com>", "5 more architect jobs", long_body, size=4321)]))
+    app.dependency_overrides[get_db] = lambda: S()
+    c = TestClient(app)
+    c.cookies.set("session", auth.make_session("me@example.com"))
+    m = c.get("/messages/r1").json()
+    assert m["body"].startswith("Line one of the job alert.") and len(m["body"]) > 600       # whole cleaned text, not just 600 chars
+    assert len(m["preview"]) == 600 and m["size_bytes"] == 4321 and m["sender_email"] == "alert@jobalert.indeed.com"
+    assert m["date"] and m["gmail_link"] and "labels" in m
+    assert c.get("/messages/nope").status_code == 404
