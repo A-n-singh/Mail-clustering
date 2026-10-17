@@ -43,8 +43,8 @@ const TEXTS = {
 };
 
 /**
- * Wraps a view with an explanation that sits over it, blurred so nobody can read it by accident.
- * "Read how this works" removes the blur; the view underneath fades out of the way.
+ * Wraps a view with a "Read how this works" button. The view is untouched until the button is pressed;
+ * then the explanation replaces it, and "Show the view" brings it back.
  */
 export default function Explain({ id, children }) {
   const [on, setOn] = useState(false);
@@ -56,9 +56,11 @@ export default function Explain({ id, children }) {
       </div>
       <div className="explain-body">
         <div className="explain-view">{children}</div>
-        <div className="explain-text" aria-hidden={!on}>
-          {t.map(([h, p]) => (<section key={h}><h4>{h}</h4><p>{p}</p></section>))}
-        </div>
+        {on && (
+          <div className="explain-text">
+            {t.map(([h, p]) => (<section key={h}><h4>{h}</h4><p>{p}</p></section>))}
+          </div>
+        )}
       </div>
     </div>
   );
