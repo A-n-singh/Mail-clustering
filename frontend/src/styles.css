@@ -128,3 +128,20 @@ nav.tabs { display: flex; gap: 6px; margin: 12px 0; flex-wrap: wrap; }
 .row .subj .chev { color: var(--accent); display: inline-block; width: 1em; }
 .reader { flex-basis: 100%; border: 1px solid var(--line); background: rgba(0, 229, 255, .04); padding: 10px 12px; margin: 2px 0 6px; }
 .reader pre.body { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 var(--mono); max-height: 320px; overflow: auto; margin: 8px 0; color: var(--text); }
+
+/* explanation text: always there, blurred until "Read how this works" is pressed */
+.explain-bar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.explain-body { position: relative; }
+.explain-view { transition: opacity .3s; }
+.explain-text {
+  position: absolute; inset: 0; z-index: 5; overflow: hidden; padding: 22px 28px; pointer-events: none;
+  display: flex; flex-direction: column; justify-content: flex-start; gap: 6px; opacity: .55; filter: blur(6px);
+  transition: opacity .3s, filter .3s;
+}
+.explain-text section { max-width: 760px; margin: 0 auto; width: 100%; }
+.explain-text h4 { margin: 8px 0 3px; font: 700 12px var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--accent); }
+.explain-text p { margin: 0; font-size: 16px; line-height: 1.5; color: var(--text); }
+.explain.on .explain-body { min-height: 440px; }
+.explain.on .explain-view { opacity: .06; pointer-events: none; }
+.explain.on .explain-text { opacity: 1; filter: none; pointer-events: auto; overflow: auto; background: rgba(2, 11, 18, .92); }
+@media (prefers-reduced-motion: reduce) { .explain-text, .explain-view { transition: none; } }

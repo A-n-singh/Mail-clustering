@@ -4,6 +4,7 @@ import Bubbles from "./Bubbles.jsx";
 import ClusterMap, { GREY, topicColor } from "./ClusterMap.jsx";
 import Hologram from "./Hologram.jsx";
 import Filters, { EMPTY } from "./Filters.jsx";
+import Explain from "./Explain.jsx";
 import { ConfirmModal, MailRow, Reader, useMailBody } from "./MailList.jsx";
 
 function usePoll(fn, ms, deps = []) {
@@ -165,7 +166,7 @@ function NeedsAction({ version, act }) {
   if (err) return <p className="err">{err.message}</p>;
   if (!rows) return <p className="muted">Loading…</p>;
   if (!rows.length) return <div className="card muted">Nothing needs action right now.</div>;
-  return <div className="card">{rows.map((m) => <MailRow key={m.message_id} m={m} onAct={act} />)}</div>;
+  return <div className="card"><Explain id="needs">{rows.map((m) => <MailRow key={m.message_id} m={m} onAct={act} />)}</Explain></div>;
 }
 
 function Groups({ version, act }) {
@@ -179,11 +180,13 @@ function Groups({ version, act }) {
       {err && <p className="err">{err.message}</p>}
       {!picked ? (
         <div className="card">
+          <Explain id="groups">
           <div className="legend">Bubble size = mail count · colour = importance <i /> low → high · click a bubble to open it</div>
           {groups && groups.length ? <Bubbles groups={groups} onPick={pick} /> : <p className="muted">No groups match these filters.</p>}
           {groups && groups.some((g) => g.gmail_total > g.count) && (
             <p className="muted">Some groups are capped at 360 kept mails; older mail is pulled in as you clean.</p>
           )}
+          </Explain>
         </div>
       ) : (
         <Drill group={picked} filters={filters} version={version} act={act} onBack={() => setPicked(null)} />
@@ -280,9 +283,11 @@ function TopicMap({ version, act }) {
 
       {!noTopics && (view === "holo" || view === "flat") && map && (
         <>
+        <Explain id="map">
           {view === "holo"
             ? <Hologram points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} />
             : <ClusterMap points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} />}
+        </Explain>
           {focus != null && (
             <div className="filters" style={{ marginTop: 10 }}>
               <button onClick={() => setSel(new Set(points.filter((p) => (focus === 0 ? p.t == null : p.t === focus)).map((p) => p.i)))}>
@@ -338,6 +343,7 @@ function Digest({ version }) {
   if (!d) return <p className="muted">Loading…</p>;
   return (
     <div className="card">
+      <Explain id="digest">
       <h3>Needs action</h3>
       {d.needs_action.length ? d.needs_action.map((m) => (
         <div className="row" key={m.message_id}><span className="score">{m.score}</span>
@@ -345,6 +351,7 @@ function Digest({ version }) {
       )) : <p className="muted">Nothing.</p>}
       <h3>Biggest groups</h3>
       <ul>{d.groups.map((g) => <li key={g.cluster_id}>{g.label}: {g.count}</li>)}</ul>
+      </Explain>
     </div>
   );
 }
@@ -354,9 +361,11 @@ function Storage({ version }) {
   if (!s) return <p className="muted">Loading…</p>;
   return (
     <div className="card">
+      <Explain id="storage">
       <p><b>{fmtBytes(s.kept_bytes)}</b> in tracked mail · <b>{fmtBytes(s.in_trash_bytes)}</b> in Trash (Gmail frees this after 30 days, or empty Trash in Gmail to free it now).</p>
       <h3>Biggest groups</h3>
       {s.biggest_groups.map((g) => <div className="row" key={g.label}><div className="main">{g.label}</div><b>{fmtBytes(g.bytes)}</b></div>)}
+      </Explain>
     </div>
   );
 }
@@ -376,6 +385,7 @@ function Trash({ version, onDone }) {
   }
   return (
     <div className="card">
+      <Explain id="trash">
       <p><b>{t.count}</b> mails in Trash · <b>{fmtBytes(t.bytes)}</b>. Gmail frees this by itself 30 days after each mail was trashed.</p>
       {!t.enabled ? (
         <p className="muted">Permanent delete is turned off. To free the space now, set <code>ALLOW_PERMANENT_DELETE=true</code> and sign in again
@@ -383,6 +393,7 @@ function Trash({ version, onDone }) {
       ) : (
         <button className="danger" disabled={!t.count} onClick={() => { setErr(null); setOpen(true); }}>Delete these {t.count} mails forever…</button>
       )}
+      </Explain>
       {open && (
         <div className="modal" role="dialog" aria-modal="true">
           <div className="box">
@@ -408,6 +419,7 @@ function Log({ version, onUndo }) {
   const batches = [...new Map(rows.map((r) => [r.batch_id, r])).values()];
   return (
     <div className="card">
+      <Explain id="log">
       {!batches.length && <p className="muted">No actions yet.</p>}
       {batches.map((b) => {
         const n = rows.filter((r) => r.batch_id === b.batch_id).length;
@@ -418,6 +430,7 @@ function Log({ version, onUndo }) {
           </div>
         );
       })}
+      </Explain>
     </div>
   );
 }
@@ -426,6 +439,7 @@ function Account() {
   const [confirming, setConfirming] = useState(false);
   return (
     <div className="card">
+      <Explain id="account">
       <h3>Disconnect and erase my data</h3>
       <p className="muted">Revokes the Google access token and deletes every stored mail, group, score and log. Your Gmail itself is not changed.</p>
       {!confirming ? <button className="danger" onClick={() => setConfirming(true)}>Delete my data…</button> : (
@@ -435,6 +449,7 @@ function Account() {
           <button onClick={() => setConfirming(false)}>Cancel</button>
         </>
       )}
+      </Explain>
     </div>
   );
 }
