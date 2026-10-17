@@ -12,6 +12,7 @@ from app.gmail import RawMail
 
 
 class FakeGmail:
+    deleted = None
     def __init__(self, mails):
         self.mails = {m.message_id: m for m in mails}
         self.history = "100"
@@ -31,6 +32,10 @@ class FakeGmail:
     def trash(self, mid): self.calls.append(("trash", mid))
     def untrash(self, mid): self.calls.append(("untrash", mid))
     def ensure_label(self, name): return "Label_" + name
+    def delete_permanently(self, ids):
+        self.deleted = (self.deleted or []) + list(ids)
+        for i in ids:
+            self.mails.pop(i, None)
 
 
 def mail(i, sender="Bob <bob@acme.com>", subject="hi", body="hello", unsub=None, labels=("INBOX", "UNREAD"), day=1, size=1000):

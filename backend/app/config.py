@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     llm_model: str = "claude-haiku-5-5"
     llm_daily_cap: int = 300  # max LLM calls per day
+    # Permanent delete of mail ALREADY IN TRASH. Off by default: turning it on makes sign-in ask Google for the
+    # full-mailbox scope (https://mail.google.com/), which is the only scope that allows permanent deletion.
+    allow_permanent_delete: bool = False
     cluster_cap: int = 360  # max mails kept per cluster
 
 

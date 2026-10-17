@@ -17,6 +17,7 @@ from .gmail import GmailClient, GoogleGmailClient
 from .models import Action, Cluster, Message, MessageCluster, Owner, Score, SyncRun
 from .security import decrypt, encrypt
 from .capacity import refill
+from .purge import PurgeError, purge_trash, trash_summary
 from .sync import run_sync, sync_in_progress
 
 @asynccontextmanager
@@ -282,6 +283,33 @@ def action_log(db: Session = Depends(get_db), _: str = Depends(auth.current_user
     rows = db.scalars(select(Action).order_by(Action.action_id.desc()).limit(100))
     return [{"batch_id": a.batch_id, "message_id": a.message_id, "action": a.action,
              "timestamp": a.timestamp.isoformat(), "undone": a.undone} for a in rows]
+
+
+# ---------- permanent delete of mail already in Trash ----------
+CONFIRM_PHRASE = "DELETE FOREVER"
+
+
+@app.get("/trash")
+def trash_info(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    return {**trash_summary(db), "enabled": settings.allow_permanent_delete, "confirm_phrase": CONFIRM_PHRASE}
+
+
+class PurgeIn(BaseModel):
+    confirm: str
+    message_ids: list[str] | None = None  # omit = everything currently in Trash
+
+
+@app.post("/trash/purge")
+def trash_purge(body: PurgeIn, db: Session = Depends(get_db), gmail: GmailClient = Depends(get_gmail),
+                _: str = Depends(auth.current_user)):
+    if not settings.allow_permanent_delete:
+        raise HTTPException(403, "Permanent delete is turned off (set ALLOW_PERMANENT_DELETE=true and sign in again)")
+    if body.confirm != CONFIRM_PHRASE:
+        raise HTTPException(400, f'Type "{CONFIRM_PHRASE}" to confirm')
+    try:
+        return purge_trash(db, gmail, body.message_ids)
+    except PurgeError as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------- digest ----------

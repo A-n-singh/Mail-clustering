@@ -33,6 +33,8 @@ class GmailClient(Protocol):
     def trash(self, message_id: str) -> None: ...
     def untrash(self, message_id: str) -> None: ...
     def ensure_label(self, name: str) -> str: ...
+    def delete_permanently(self, message_ids: list[str]) -> None:
+        """IRREVERSIBLE. Callers must only pass mail that is already in Trash."""
 
 
 class GoogleGmailClient:
@@ -97,6 +99,11 @@ class GoogleGmailClient:
 
     def untrash(self, message_id):
         self.svc.users().messages().untrash(userId="me", id=message_id).execute()
+
+    def delete_permanently(self, message_ids):
+        for i in range(0, len(message_ids), 1000):  # batchDelete takes at most 1000 ids
+            self.svc.users().messages().batchDelete(
+                userId="me", body={"ids": message_ids[i:i + 1000]}).execute()
 
     def ensure_label(self, name):
         for lab in self.svc.users().labels().list(userId="me").execute().get("labels", []):

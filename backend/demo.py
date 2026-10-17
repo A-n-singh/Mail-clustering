@@ -52,6 +52,8 @@ class DemoGmail:
     def trash(self, mid): self.mails[mid].labels = ["TRASH"]
     def untrash(self, mid): self.mails[mid].labels = ["INBOX"]
     def ensure_label(self, name): return "Label_" + name
+    def delete_permanently(self, ids):
+        for i in ids: self.mails.pop(i, None)
 
 
 gmail = DemoGmail()

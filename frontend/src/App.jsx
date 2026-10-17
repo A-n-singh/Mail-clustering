@@ -92,7 +92,7 @@ function Dashboard({ email }) {
       )}
 
       <nav className="tabs">
-        {[["needs", "Needs action"], ["groups", "Groups"], ["digest", "Daily digest"], ["storage", "Storage"], ["log", "Action log"], ["settings", "Account"]].map(([k, l]) => (
+        {[["needs", "Needs action"], ["groups", "Groups"], ["digest", "Daily digest"], ["storage", "Storage"], ["trash", "Trash"], ["log", "Action log"], ["settings", "Account"]].map(([k, l]) => (
           <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>
         ))}
       </nav>
@@ -101,6 +101,7 @@ function Dashboard({ email }) {
       {tab === "groups" && <Groups version={version} act={act} />}
       {tab === "digest" && <Digest version={version} />}
       {tab === "storage" && <Storage version={version} />}
+      {tab === "trash" && <Trash version={version} onDone={(text) => { setToast({ text }); refresh(); }} />}
       {tab === "log" && <Log version={version} onUndo={async (b) => { await api.undo(b); refresh(); }} />}
       {tab === "settings" && <Account />}
 
@@ -215,6 +216,47 @@ function Storage({ version }) {
       <p><b>{fmtBytes(s.kept_bytes)}</b> in tracked mail · <b>{fmtBytes(s.in_trash_bytes)}</b> in Trash (Gmail frees this after 30 days, or empty Trash in Gmail to free it now).</p>
       <h3>Biggest groups</h3>
       {s.biggest_groups.map((g) => <div className="row" key={g.label}><div className="main">{g.label}</div><b>{fmtBytes(g.bytes)}</b></div>)}
+    </div>
+  );
+}
+
+function Trash({ version, onDone }) {
+  const [t, reload] = usePoll(api.trash, 0, [version]);
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [err, setErr] = useState(null);
+  if (!t) return <p className="muted">Loading…</p>;
+  async function purge() {
+    try {
+      const r = await api.purge(typed);
+      setOpen(false); setTyped(""); reload();
+      onDone(`Permanently deleted ${r.deleted} mails · freed ${fmtBytes(r.bytes_freed)}${r.skipped_restored ? ` · ${r.skipped_restored} skipped (restored)` : ""}`);
+    } catch (e) { setErr(e.message); }
+  }
+  return (
+    <div className="card">
+      <p><b>{t.count}</b> mails in Trash · <b>{fmtBytes(t.bytes)}</b>. Gmail frees this by itself 30 days after each mail was trashed.</p>
+      {!t.enabled ? (
+        <p className="muted">Permanent delete is turned off. To free the space now, set <code>ALLOW_PERMANENT_DELETE=true</code> and sign in again
+          (Google will ask for full-mailbox access, which is the only permission that allows it), or empty Trash inside Gmail.</p>
+      ) : (
+        <button className="danger" disabled={!t.count} onClick={() => { setErr(null); setOpen(true); }}>Delete these {t.count} mails forever…</button>
+      )}
+      {open && (
+        <div className="modal" role="dialog" aria-modal="true">
+          <div className="box">
+            <h3 style={{ marginTop: 0 }}>Delete {t.count} mails forever?</h3>
+            <p>This frees <b>{fmtBytes(t.bytes)}</b> immediately and <b>cannot be undone</b>. Only mail already in Trash is deleted.</p>
+            <p className="muted">Type <b>{t.confirm_phrase}</b> to continue:</p>
+            <input value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="confirmation" style={{ width: "100%" }} />
+            {err && <p className="err">{err}</p>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+              <button onClick={() => setOpen(false)}>Cancel</button>
+              <button className="danger" disabled={typed !== t.confirm_phrase} onClick={purge}>Delete forever</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

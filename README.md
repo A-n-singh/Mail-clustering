@@ -19,3 +19,8 @@ cd backend && python demo.py                     # then open the frontend and cl
 docker compose up -d db   # DATABASE_URL=postgresql+psycopg://inbox:inbox@localhost:5432/inbox
 ```
 Tests: `cd backend && pytest` · `cd frontend && npm test`. Optional LLM pass: set `ANTHROPIC_API_KEY`.
+
+### Permanent delete (optional)
+Off by default. Set `ALLOW_PERMANENT_DELETE=true` and sign in again: Google then asks for full-mailbox access
+(`https://mail.google.com/`), the only scope that allows it. The **Trash** tab can then delete mail that is already in
+Trash, after you type `DELETE FOREVER`. Mail restored since the last sync is skipped. Without it, Gmail empties Trash after 30 days.

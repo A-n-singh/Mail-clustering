@@ -4,8 +4,12 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from .config import settings
 
-SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email",
-          "https://www.googleapis.com/auth/gmail.modify"]
+_BASE_SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email"]
+
+
+def scopes() -> list[str]:
+    gmail = "https://mail.google.com/" if settings.allow_permanent_delete else "https://www.googleapis.com/auth/gmail.modify"
+    return _BASE_SCOPES + [gmail]
 COOKIE = "session"
 MAX_AGE = 60 * 60 * 24 * 7
 
@@ -38,4 +42,4 @@ def build_flow():
                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                    "token_uri": "https://oauth2.googleapis.com/token",
                    "redirect_uris": [settings.oauth_redirect_uri]}}
-    return Flow.from_client_config(cfg, scopes=SCOPES, redirect_uri=settings.oauth_redirect_uri)
+    return Flow.from_client_config(cfg, scopes=scopes(), redirect_uri=settings.oauth_redirect_uri)
