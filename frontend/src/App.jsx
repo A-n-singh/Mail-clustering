@@ -38,8 +38,14 @@ function Dashboard({ email }) {
   const [confirm, setConfirm] = useState(null);
   const [version, setVersion] = useState(0); // bump to refetch everything after an action
   const [status, reloadStatus] = usePoll(api.syncStatus, 3000);
-  const [summary] = usePoll(api.summary, 0, [version, status?.running]);
+  // while a sync runs, keep the header numbers live (every 4s) and refresh the open views (every 12s)
+  const [summary] = usePoll(api.summary, status?.running ? 4000 : 0, [version, status?.running]);
   const refresh = () => setVersion((v) => v + 1);
+  useEffect(() => {
+    if (!status?.running) return;
+    const t = setInterval(() => setVersion((v) => v + 1), 12000);
+    return () => clearInterval(t);
+  }, [status?.running]);
 
   /** Single mail -> run now. Several -> preview + confirm first. Always offer Undo afterwards. */
   const act = useCallback(async (ids, action, param) => {

@@ -135,3 +135,18 @@ def test_header_total_matches_the_groups_below_even_after_a_failed_sync(db):
     clustered = len(list(db.scalars(select(MessageCluster))))
     assert stored == 7 and clustered == stored                         # nothing stored but left ungrouped
     assert sum(c.size for c in db.scalars(select(Cluster))) == stored  # and the group sizes add up
+
+
+def test_mails_are_grouped_while_a_long_sync_is_still_running(db):
+    """Grouping used to happen only at the very end, so 'Grouped' stayed 0 for the whole first sync."""
+    from app.models import MessageCluster
+    g = FakeGmail([mail(f"m{i}", f"S <s@co{i % 5}.com>", f"hello {i}") for i in range(620)])
+    real, mid_sync = g.get_message, {}
+    def watching(mid):
+        if mid == "m560":   # we are past the 500th mail, but the sync is not finished
+            mid_sync["grouped"] = len(list(db.scalars(select(MessageCluster))))
+        return real(mid)
+    g.get_message = watching
+    run_sync(db, g, initial_fetch=1000)
+    assert mid_sync["grouped"] >= 500                                  # grouping happened mid-sync
+    assert len(list(db.scalars(select(MessageCluster)))) == 620        # and everything is grouped at the end

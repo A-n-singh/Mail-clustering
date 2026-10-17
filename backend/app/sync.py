@@ -48,6 +48,8 @@ def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: in
             store_raw(db, gmail.get_message(mid))
             if n % 25 == 0:
                 run.fetched = n
+                if n % 500 == 0:
+                    regroup(db)  # group as we go, so Groups/Grouped fill in during a long first sync
                 db.commit()  # lets /sync/status show progress
         if deleted:
             _remove(db, deleted)
