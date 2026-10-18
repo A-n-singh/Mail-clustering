@@ -26,7 +26,7 @@ TTL = 6 * 3600
 _lock = threading.RLock()
 _cache: dict[str, dict] = {}
 _cache_sig: object = None
-_subject_vecs: dict[str, np.ndarray] = {}
+_subject_vecs: dict[tuple[str, str], np.ndarray] = {}
 
 
 def _sig(db: Session):
@@ -65,13 +65,13 @@ def members(db: Session, path: str) -> list[str]:
 def _subject_matrix(ids: list[str], msgs: dict[str, Message]) -> np.ndarray:
     """What the subject says, nothing else, so 'Delivered' from Amazon and from Flipkart land together."""
     emb = get_embedder()
-    todo = [i for i in ids if i not in _subject_vecs]
+    todo = [i for i in ids if (emb.name, i) not in _subject_vecs]      # keyed by model too: a changed model never reuses old vectors
     for s in range(0, len(todo), 64):
         chunk = todo[s:s + 64]
         vecs = emb.embed([msgs[i].subject or msgs[i].sender or "(no subject)" for i in chunk])
         for i, v in zip(chunk, vecs):
-            _subject_vecs[i] = v / max(float(np.linalg.norm(v)), 1e-9)
-    return np.vstack([_subject_vecs[i] for i in ids])
+            _subject_vecs[(emb.name, i)] = v / max(float(np.linalg.norm(v)), 1e-9)
+    return np.vstack([_subject_vecs[(emb.name, i)] for i in ids])
 
 
 def _leaf(path: str, n: int, reason: str) -> dict:
@@ -91,8 +91,9 @@ def _build(db: Session, path: str) -> dict:
         ids = [i for i in ids if i in msgs]
         X = _subject_matrix(ids, msgs)
     else:
-        ensure_embeddings(db, get_embedder())  # the stored vectors know the sender too, so a split can follow who sent it
-        ids, X = load_matrix(db, ids)
+        emb = get_embedder()
+        ensure_embeddings(db, emb)  # the stored vectors know the sender too, so a split can follow who sent it
+        ids, X = load_matrix(db, ids, emb.name)
         if len(ids) < LEAF_BELOW:
             return _leaf(path, len(ids), f"Only {len(ids)} mails here, so there is nothing more to split.")
     n = len(ids)

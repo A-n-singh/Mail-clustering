@@ -89,6 +89,25 @@ def check_database() -> list[tuple[str, str, str]]:
         return [(FAIL, "Database", f"{type(e).__name__}: {e}")]
 
 
+def check_embeddings() -> list[tuple[str, str, str]]:
+    """Are the stored vectors made by the model in EMBED_MODEL? If not, the next sync recomputes them and rebuilds the topics."""
+    try:
+        from sqlalchemy import func, select
+        from .config import settings
+        from .db import SessionLocal
+        from .embeddings import stale_embeddings
+        from .models import Embedding
+        with SessionLocal() as db:
+            total = db.scalar(select(func.count()).select_from(Embedding)) or 0
+            stale = stale_embeddings(db, settings.embed_model)
+        if stale:
+            return [(WARN, "Stored vectors", f"{stale} mails were embedded by a different model than EMBED_MODEL={settings.embed_model}. "
+                     "The next sync recomputes them and rebuilds the topics (this can take a few minutes).")]
+        return [(OK, "Stored vectors", f"{total} mails, all made by {settings.embed_model}")]
+    except Exception as e:
+        return [(WARN, "Stored vectors", f"could not check: {type(e).__name__}: {e}")]
+
+
 def check_model() -> list[tuple[str, str, str]]:
     try:
         t = time.time()
@@ -143,7 +162,7 @@ def check_gmail() -> list[tuple[str, str, str]]:
 def main(argv: list[str]) -> int:
     from .config import settings
     rows = check_config(settings) + check_machine(os.path.dirname(settings.database_url.split("///")[-1]) or ".") + check_database()
-    rows += check_title_model()
+    rows += check_title_model() + check_embeddings()
     if "--model" in argv:
         rows += check_model()
     if "--live" in argv:

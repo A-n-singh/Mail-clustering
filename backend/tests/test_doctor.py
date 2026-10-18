@@ -36,3 +36,26 @@ def test_redirect_rules():
     assert levels(cfg(frontend_url="https://other.example.com"))["FRONTEND_URL"] == FAIL                              # cookie would be lost
     assert levels(cfg(oauth_redirect_uri="http://localhost:8000/auth/callback", frontend_url="http://localhost:5173"))["OAUTH_REDIRECT_URI"] == WARN
     assert levels(cfg(allow_permanent_delete=True))["ALLOW_PERMANENT_DELETE"] == WARN
+
+
+def test_stored_vectors_check_warns_when_the_model_changed():
+    from sqlalchemy import select
+    from app import doctor
+    from app.config import settings
+    from app.db import Base, SessionLocal, engine
+    from app.models import Embedding, Message
+    from datetime import datetime, timezone
+    Base.metadata.create_all(engine)
+    with SessionLocal() as db:
+        db.add(Message(message_id="d1", thread_id="t", subject="hi", date=datetime(2026, 1, 1, tzinfo=timezone.utc)))
+        db.add(Embedding(message_id="d1", model="some-older-model", vector=b"\0\0\0\0"))
+        db.commit()
+    (lvl, name, msg), = doctor.check_embeddings()
+    assert (lvl, name) == (doctor.WARN, "Stored vectors") and "recomputes them" in msg and settings.embed_model in msg
+    with SessionLocal() as db:
+        db.get(Embedding, "d1").model = settings.embed_model
+        db.commit()
+    (lvl, _, msg), = doctor.check_embeddings()
+    assert lvl == doctor.OK and "all made by" in msg
+    with SessionLocal() as db:
+        db.delete(db.get(Embedding, "d1")); db.delete(db.get(Message, "d1")); db.commit()

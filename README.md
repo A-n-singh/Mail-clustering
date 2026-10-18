@@ -33,6 +33,12 @@ the most distinctive words in the cluster (no LLM). 2D coordinates are stored, s
 New mail is placed into the nearest topic after every sync; topics are rebuilt weekly (`RECLUSTER_DAYS`) or with **Rebuild topics**.
 Topic IDs stay stable across rebuilds. Lasso-select dots to trash/archive/star in bulk (same confirm + Undo + protection rules).
 
+### Changing the embedding model
+`EMBED_MODEL` can be changed at any time (the default `BAAI/bge-small-en-v1.5` was kept after a benchmark of nine models). Each stored vector remembers
+which model made it. At the next sync, if any mail carries a vector from a different model, **every vector is recomputed and the topics are rebuilt
+right away** (not at the weekly rebuild), so vectors of two models are never mixed. It takes a few minutes for a few thousand mails, can be stopped and
+resumed (only what is still stale is redone), and settles after one rebuild. `python -m app.doctor` shows whether your stored vectors match.
+
 ### Look and feel
 The dashboard uses a dark "HUD" theme. **Topic map → Hologram 3D** shows every mail as a glowing node in 3D, each topic wrapped in a
 rotating wireframe shell with a floating label. Drag to orbit, wheel to zoom, hover to scan a mail, click to open it, and use
