@@ -37,3 +37,17 @@ Topic IDs stay stable across rebuilds. Lasso-select dots to trash/archive/star i
 The dashboard uses a dark "HUD" theme. **Topic map → Hologram 3D** shows every mail as a glowing node in 3D, each topic wrapped in a
 rotating wireframe shell with a floating label. Drag to orbit, wheel to zoom, hover to scan a mail, click to open it, and use
 **Lasso** to select nodes for bulk actions. A plain list is one click away. The **Groups** tab is a hologram too: one ball per sender, and going inside a sender shows one ball per kind of subject.
+
+### Topic headings
+A topic is named by a small fixed pipeline, `backend/app/naming.py`:
+1. **Facts.** Subjects are counted by type, with order numbers collapsed ("Your order #123 has shipped" and "#456" are one type).
+2. **Router.** If one subject type covers at least 70% of the topic, that subject (numbers dropped) is the heading. No model is used.
+3. **Namer.** Otherwise a tiny local model (Qwen2.5-0.5B-Instruct) reads the 5 most typical subjects and writes at most 6 words.
+4. **Checker.** Plain code rejects an empty or long heading, numbers, a bare sender name, alarm words when the topic has no urgent mail, a heading
+   that shares no word with the subjects, or one that just copies a single subject of a mixed topic.
+5. **Retry once, then fall back** to the most typical real subject. The old keyword label is the last resort.
+
+The model is optional and never trains or learns. Without it, mixed topics are named by their most typical subject.
+To switch it on: `pip install -r requirements-naming.txt`, `python fetch_title_model.py`, then set `TITLE_MODEL_PATH` in `.env` to the path it prints
+(about 0.5 GB, one download, then everything runs on your machine). `python -m app.doctor` shows its status. Any chat GGUF works, for example the
+1.5B Qwen file for better wording at about 1.1 GB.

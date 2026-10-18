@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     recluster_days: int = 7
     gmail_rate_per_sec: float = 8  # pace Gmail calls; Gmail limits quota units per minute per user
     cluster_cap: int = 360  # max mails kept per cluster
+    # Optional tiny local model that writes topic headings for mixed clusters (a .gguf file, e.g. Qwen2.5-0.5B-Instruct Q4).
+    # Empty = no model: mixed clusters are then named by their most typical real subject. See README.
+    title_model_path: str = ""
 
 
 settings = Settings()

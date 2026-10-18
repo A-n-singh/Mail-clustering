@@ -100,6 +100,21 @@ def check_model() -> list[tuple[str, str, str]]:
         return [(FAIL, "Embedding model", f"{type(e).__name__}: {e}. The server needs internet on first use to download it.")]
 
 
+def check_title_model() -> list[tuple[str, str, str]]:
+    """Optional heading model. Not set is fine: mixed topics are then named by their most typical real subject."""
+    from .config import settings
+    path = settings.title_model_path
+    if not path:
+        return [(OK, "Heading model", "not set (optional). Mixed topics use their most typical subject as the heading.")]
+    if not os.path.isfile(path):
+        return [(WARN, "Heading model", f"TITLE_MODEL_PATH points at {path}, which is not a file. Headings fall back to real subjects.")]
+    try:
+        import llama_cpp  # noqa: F401
+    except Exception:
+        return [(WARN, "Heading model", "the file exists but llama-cpp-python is not installed (pip install -r requirements-naming.txt).")]
+    return [(OK, "Heading model", f"{os.path.basename(path)} ({os.path.getsize(path) // 1_000_000} MB)")]
+
+
 def check_gmail() -> list[tuple[str, str, str]]:
     try:
         from sqlalchemy import select
@@ -128,6 +143,7 @@ def check_gmail() -> list[tuple[str, str, str]]:
 def main(argv: list[str]) -> int:
     from .config import settings
     rows = check_config(settings) + check_machine(os.path.dirname(settings.database_url.split("///")[-1]) or ".") + check_database()
+    rows += check_title_model()
     if "--model" in argv:
         rows += check_model()
     if "--live" in argv:

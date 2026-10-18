@@ -10,6 +10,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from . import control
+from . import naming
 from .config import settings
 from .embeddings import Embedder, ensure_embeddings, get_embedder, load_matrix
 from .models import Message, MessageTopic, Score, Topic, TopicRun
@@ -131,7 +132,7 @@ def _store(db: Session, run: TopicRun, ids: list[str], xyz: np.ndarray, labels: 
 
     docs = {l: " ".join(f"{msgs[m].subject_key} {msgs[m].sender}" for m in mids) for l, mids in members.items()}
     senders = {l: Counter(msgs[m].sender for m in mids) for l, mids in members.items()}
-    names = _label_clusters(docs, senders)
+    names = naming.rename(db, members, msgs, _label_clusters(docs, senders))
     for lab, t in topic_of.items():
         t.label, t.summary = names[lab]
         t.size = len(members[lab])

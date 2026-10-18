@@ -13,6 +13,7 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import naming
 from .config import settings
 from .embeddings import ensure_embeddings, get_embedder, load_matrix
 from .models import Message, MessageTopic, Score, TopicRun
@@ -116,7 +117,7 @@ def _build(db: Session, path: str) -> dict:
     docs = {k: " ".join((msgs[m].subject_key or msgs[m].subject or "") + ("" if by_subject else " " + msgs[m].sender) for m in v)
             for k, v in mem.items()}
     senders = {k: Counter(msgs[m].sender for m in v) for k, v in mem.items()}
-    names = _label_clusters(docs, senders)
+    names = naming.rename(db, mem, msgs, _label_clusters(docs, senders))
     seen = Counter(n[0] for n in names.values())
     for k in names:   # siblings that would read the same get told apart by who sends most of them
         if seen[names[k][0]] > 1:
