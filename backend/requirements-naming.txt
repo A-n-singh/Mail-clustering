@@ -1,3 +1,3 @@
-# Optional: the tiny local model that writes topic headings for mixed topics (see README, "Topic headings").
+# Optional: runs the local models that write topic headings for mixed topics (see README, "Topic headings").
 # Without it the app works the same, and mixed topics are named by their most typical real subject.
 llama-cpp-python

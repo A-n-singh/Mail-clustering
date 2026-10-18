@@ -66,13 +66,38 @@ def test_mixed_cluster_uses_the_model_when_the_answer_passes():
     ("Statement 4821", "has numbers"),
     ("HDFC Bank", "just a sender name"),
     ("Urgent deadline alerts", "alarm words but no urgent mail here"),
-    ("Holiday travel plans", "shares no word with the subjects"),
-    ("HDFC Bank offers", "shares no word with the subjects"),        # only the sender's name matches
+    ("Holiday travel plans", "shares no word with the subjects and is not close to them in meaning"),
+    ("HDFC Bank offers", "shares no word with the subjects and is not close to them in meaning"),   # only the sender's name matches
     ("Statement ending is ready", "copies one subject of a mixed group"),
 ])
 def test_checker_rejects(bad, why):
     facts = naming.facts_of(msgs(MIXED), set())
     assert naming.check(naming.tidy(bad), facts) == why
+
+
+class StubEmbedder:
+    """Maps a text to a fixed vector, so closeness is predictable: 'bank'-ish texts point one way, others another."""
+    def embed(self, texts):
+        import numpy as np
+        return np.array([[1.0, 0.0] if any(w in t.lower() for w in ("statement", "sign-in", "payment", "bank", "account")) else [0.0, 1.0]
+                         for t in texts], dtype=np.float32)
+
+
+def test_close_in_meaning_passes_when_no_word_is_shared():
+    facts = naming.facts_of(msgs(MIXED), set())
+    close = naming._closeness(StubEmbedder(), ["Statement ending is ready", "Your credit card payment is due"])
+    assert naming.check("Account notifications", facts) == "shares no word with the subjects and is not close to them in meaning"
+    assert naming.check("Account notifications", facts, close) is None            # 'account' is close in meaning
+    assert naming.check("Holiday travel plans", facts, close) == "shares no word with the subjects and is not close to them in meaning"
+
+
+def test_closeness_is_off_without_an_embedder_and_survives_a_broken_one():
+    assert naming._closeness(None, ["x"]) is None
+
+    class Broken:
+        def embed(self, t):
+            raise RuntimeError("no model")
+    assert naming._closeness(Broken(), ["x"]) is None
 
 
 def test_checker_accepts_alarm_words_only_when_urgent_mail_exists():
@@ -85,6 +110,28 @@ def test_a_rejected_answer_gets_one_retry_with_another_prompt():
     f = Fake("Holiday travel plans", "Statement and payment alerts")
     r = naming.name_cluster(msgs(MIXED), set(), f)
     assert (r.label, r.source) == ("Statement and payment alerts", "model") and [c[2] for c in f.calls] == [0, 1]
+
+
+def test_after_two_rejections_the_larger_model_gets_one_try():
+    small, large = Fake("Holiday travel plans", "Holiday travel plans"), Fake("Bank statements and payments")
+    r = naming.name_cluster(msgs(MIXED), set(), small, large)
+    assert (r.label, r.source) == ("Bank statements and payments", "model-large")
+    assert len(small.calls) == 2 and [c[2] for c in large.calls] == [1]         # the stricter prompt, once
+
+
+def test_the_larger_model_is_not_called_when_the_main_one_passes():
+    r = naming.name_cluster(msgs(MIXED), set(), Fake("Credit card and statement alerts"), Boom())
+    assert r.source == "model"
+
+
+def test_if_the_larger_model_is_also_rejected_the_real_subject_is_used():
+    r = naming.name_cluster(msgs(MIXED), set(), Fake("Holiday plans", "Holiday plans"), Fake("Holiday plans"))
+    assert (r.label, r.source) == ("Statement ending is ready", "fallback")
+
+
+def test_a_larger_model_alone_is_enough_and_a_crash_in_it_is_survived():
+    assert naming.name_cluster(msgs(MIXED), set(), None, Fake("Bank statements and payments")).source == "model-large"
+    assert naming.name_cluster(msgs(MIXED), set(), None, Fake(RuntimeError("x"))).source == "fallback"
 
 
 def test_two_rejections_fall_back_to_the_most_typical_real_subject():

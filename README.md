@@ -42,12 +42,15 @@ rotating wireframe shell with a floating label. Drag to orbit, wheel to zoom, ho
 A topic is named by a small fixed pipeline, `backend/app/naming.py`:
 1. **Facts.** Subjects are counted by type, with order numbers collapsed ("Your order #123 has shipped" and "#456" are one type).
 2. **Router.** If one subject type covers at least 70% of the topic, that subject (numbers dropped) is the heading. No model is used.
-3. **Namer.** Otherwise a tiny local model (Qwen2.5-0.5B-Instruct) reads the 5 most typical subjects and writes at most 6 words.
+3. **Namer.** Otherwise a local model (Qwen2.5-1.5B-Instruct) reads the 5 most typical subjects and writes at most 6 words.
 4. **Checker.** Plain code rejects an empty or long heading, numbers, a bare sender name, alarm words when the topic has no urgent mail, a heading
    that shares no word with the subjects, or one that just copies a single subject of a mixed topic.
-5. **Retry once, then fall back** to the most typical real subject. The old keyword label is the last resort.
+5. **Retry once, then a larger model, then a real subject.** The main model gets one more try with a different prompt. If that is rejected too,
+   a larger model (Qwen3-4B-Instruct-2507) gets one try. If that is rejected, the heading is the most typical real subject. The old keyword
+   label is the last resort.
 
-The model is optional and never trains or learns. Without it, mixed topics are named by their most typical subject.
-To switch it on: `pip install -r requirements-naming.txt`, `python fetch_title_model.py`, then set `TITLE_MODEL_PATH` in `.env` to the path it prints
-(about 0.5 GB, one download, then everything runs on your machine). `python -m app.doctor` shows its status. Any chat GGUF works, for example the
-1.5B Qwen file for better wording at about 1.1 GB.
+The models are optional and never train or learn. Only one is in memory at a time, and only while topics are being named. Without them, mixed
+topics are named by their most typical subject. To switch them on: `pip install -r requirements-naming.txt`, `python fetch_title_model.py`
+(about 1.1 GB), and for the larger one `python fetch_title_model.py --large` (about 2.5 GB, needs roughly 3 GB of free memory while it runs),
+then set `TITLE_MODEL_PATH` and `TITLE_MODEL_LARGE_PATH` in `.env` to the paths it prints. Everything then runs on your machine.
+`python -m app.doctor` shows their status. Any chat GGUF file works in either place.

@@ -101,18 +101,22 @@ def check_model() -> list[tuple[str, str, str]]:
 
 
 def check_title_model() -> list[tuple[str, str, str]]:
-    """Optional heading model. Not set is fine: mixed topics are then named by their most typical real subject."""
+    """Optional heading models. Not set is fine: mixed topics are then named by their most typical real subject."""
     from .config import settings
-    path = settings.title_model_path
-    if not path:
-        return [(OK, "Heading model", "not set (optional). Mixed topics use their most typical subject as the heading.")]
-    if not os.path.isfile(path):
-        return [(WARN, "Heading model", f"TITLE_MODEL_PATH points at {path}, which is not a file. Headings fall back to real subjects.")]
-    try:
-        import llama_cpp  # noqa: F401
-    except Exception:
-        return [(WARN, "Heading model", "the file exists but llama-cpp-python is not installed (pip install -r requirements-naming.txt).")]
-    return [(OK, "Heading model", f"{os.path.basename(path)} ({os.path.getsize(path) // 1_000_000} MB)")]
+    rows = []
+    for name, var, path in (("Heading model", "TITLE_MODEL_PATH", settings.title_model_path),
+                            ("Heading model (large)", "TITLE_MODEL_LARGE_PATH", settings.title_model_large_path)):
+        if not path:
+            rows.append((OK, name, "not set (optional)." + (" Mixed topics use their most typical subject." if var == "TITLE_MODEL_PATH" else "")))
+        elif not os.path.isfile(path):
+            rows.append((WARN, name, f"{var} points at {path}, which is not a file. Headings fall back to real subjects."))
+        else:
+            try:
+                import llama_cpp  # noqa: F401
+                rows.append((OK, name, f"{os.path.basename(path)} ({os.path.getsize(path) // 1_000_000} MB)"))
+            except Exception:
+                rows.append((WARN, name, "the file exists but llama-cpp-python is not installed (pip install -r requirements-naming.txt)."))
+    return rows
 
 
 def check_gmail() -> list[tuple[str, str, str]]:
