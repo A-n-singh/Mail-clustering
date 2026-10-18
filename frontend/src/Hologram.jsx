@@ -172,14 +172,15 @@ export default function Hologram({ points, topics, focus, selected, onSelect, on
     dom.addEventListener("pointerleave", () => setTip(null));
 
     // loop
-    const clock = new THREE.Clock(); let raf;
+    const clock = new THREE.Clock(); let raf, last = performance.now();
     const loop = () => {
       const t = clock.getElapsedTime();
+      const now = performance.now(), ease = 1 - Math.exp(-Math.min(0.5, (now - last) / 1000) * 5); last = now;   // flight speed independent of frame rate
       shells.forEach((s) => { s.wire.rotation.y = t * s.speed; s.wire.rotation.x = t * s.speed * 0.6; s.ring.rotation.z = t * s.speed * 2; });
       rings.forEach((m, i) => { m.rotation.z = t * (0.05 + i * 0.03) * (i % 2 ? -1 : 1); });
       dust.rotation.y = t * 0.01;
       if (fly) {
-        controls.target.lerp(fly.t, 0.08); camera.position.lerp(fly.p, 0.08);
+        controls.target.lerp(fly.t, ease); camera.position.lerp(fly.p, ease);
         if (controls.target.distanceTo(fly.t) < 0.005 && camera.position.distanceTo(fly.p) < 0.005) fly = null;
       }
       controls.update(); renderer.render(scene, camera); raf = requestAnimationFrame(loop);
