@@ -117,7 +117,7 @@ def _build(db: Session, path: str) -> dict:
     docs = {k: " ".join((msgs[m].subject_key or msgs[m].subject or "") + ("" if by_subject else " " + msgs[m].sender) for m in v)
             for k, v in mem.items()}
     senders = {k: Counter(msgs[m].sender for m in v) for k, v in mem.items()}
-    names = naming.rename(db, mem, msgs, _label_clusters(docs, senders))
+    names = naming.rename(db, mem, msgs, _label_clusters(docs, senders), embedder=get_embedder())
     seen = Counter(n[0] for n in names.values())
     for k in names:   # siblings that would read the same get told apart by who sends most of them
         if seen[names[k][0]] > 1:

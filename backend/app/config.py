@@ -29,11 +29,10 @@ class Settings(BaseSettings):
     gmail_rate_per_sec: float = 8  # pace Gmail calls; Gmail limits quota units per minute per user
     cluster_cap: int = 360  # max mails kept per cluster
     # Optional local model that writes topic headings for mixed clusters (a .gguf file, e.g. Qwen2.5-1.5B-Instruct Q4_K_M).
-    # TITLE_MODEL_LARGE_PATH is a larger one (e.g. Qwen3-4B-Instruct-2507 Q4_K_M) tried once when the main one is rejected.
-    # Both empty = no model: mixed clusters are then named by their most typical real subject. See README.
+    # Empty = no model: mixed clusters are then named by their most typical real subject. See README.
     title_model_path: str = ""
-    title_model_large_path: str = ""
     title_min_similarity: float = 0.75   # a heading with no word in common with the subjects must be at least this close in meaning
+    title_merge_similarity: float = 0.93  # two subject types at least this close in meaning are counted as one (near-copies only)
 
 
 settings = Settings()

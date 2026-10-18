@@ -81,7 +81,8 @@ def _recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
     db.add(run)
     db.commit()
     try:
-        ensure_embeddings(db, embedder or get_embedder())
+        embedder = embedder or get_embedder()
+        ensure_embeddings(db, embedder)
         ids, X = load_matrix(db)
         run.messages = len(ids)
         if len(ids) < settings.topic_min_messages:
@@ -94,7 +95,7 @@ def _recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
         xyz = _reduce(X, 3, nn)  # stored once; the flat map uses x,y and the hologram uses x,y,z
         labels = HDBSCAN(min_cluster_size=settings.topic_min_cluster_size).fit_predict(Z)
         labels = demote_outliers(X, labels, settings.topic_min_cluster_size)
-        _store(db, run, ids, xyz, labels)
+        _store(db, run, ids, xyz, labels, embedder)
     except Exception as e:
         db.rollback()
         run = db.merge(run)
@@ -104,7 +105,7 @@ def _recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
     return run
 
 
-def _store(db: Session, run: TopicRun, ids: list[str], xyz: np.ndarray, labels: np.ndarray):
+def _store(db: Session, run: TopicRun, ids: list[str], xyz: np.ndarray, labels: np.ndarray, embedder=None):
     msgs = {m.message_id: m for m in db.scalars(select(Message).where(Message.message_id.in_(ids)))}
     members: dict[int, list[str]] = defaultdict(list)
     for mid, lab in zip(ids, labels):
@@ -132,7 +133,7 @@ def _store(db: Session, run: TopicRun, ids: list[str], xyz: np.ndarray, labels: 
 
     docs = {l: " ".join(f"{msgs[m].subject_key} {msgs[m].sender}" for m in mids) for l, mids in members.items()}
     senders = {l: Counter(msgs[m].sender for m in mids) for l, mids in members.items()}
-    names = naming.rename(db, members, msgs, _label_clusters(docs, senders))
+    names = naming.rename(db, members, msgs, _label_clusters(docs, senders), embedder=embedder)
     for lab, t in topic_of.items():
         t.label, t.summary = names[lab]
         t.size = len(members[lab])

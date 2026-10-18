@@ -41,16 +41,18 @@ rotating wireframe shell with a floating label. Drag to orbit, wheel to zoom, ho
 ### Topic headings
 A topic is named by a small fixed pipeline, `backend/app/naming.py`:
 1. **Facts.** Subjects are counted by type, with order numbers collapsed ("Your order #123 has shipped" and "#456" are one type).
-2. **Router.** If one subject type covers at least 70% of the topic, that subject (numbers dropped) is the heading. No model is used.
-3. **Namer.** Otherwise a local model (Qwen2.5-1.5B-Instruct) reads the 5 most typical subjects and writes at most 6 words.
-4. **Checker.** Plain code rejects an empty or long heading, numbers, a bare sender name, alarm words when the topic has no urgent mail, a heading
-   that shares no word with the subjects, or one that just copies a single subject of a mixed topic.
-5. **Retry once, then a larger model, then a real subject.** The main model gets one more try with a different prompt. If that is rejected too,
-   a larger model (Qwen3-4B-Instruct-2507) gets one try. If that is rejected, the heading is the most typical real subject. The old keyword
-   label is the last resort.
+2. **Merge near-copies.** With the embedding model the topics already use, types that mean the same ("Your order has shipped" / "Your order has
+   been shipped") are counted as one. Only close copies merge (`TITLE_MERGE_SIMILARITY`, default 0.93), never different themes.
+3. **Router.** If one type covers at least 70% of the topic, that subject (numbers dropped) is the heading. No model is used.
+4. **Pick by meaning.** Otherwise the model is shown up to 5 subjects, one per theme and biggest first, each with its mail count.
+5. **Namer.** A local model (Qwen2.5-1.5B-Instruct) writes at most 6 words.
+6. **Checker.** Plain code rejects an empty or long heading, numbers, a bare sender name, alarm words when the topic has no urgent mail, a heading
+   that just copies one subject of a mixed topic, or one that neither shares a word with the subjects nor is close to them in meaning
+   (`TITLE_MIN_SIMILARITY`, default 0.75).
+7. **Retry once, then a real subject.** The model gets one more try with a different prompt; after that the heading is the most typical real
+   subject. The old keyword label is the last resort.
 
-The models are optional and never train or learn. Only one is in memory at a time, and only while topics are being named. Without them, mixed
-topics are named by their most typical subject. To switch them on: `pip install -r requirements-naming.txt`, `python fetch_title_model.py`
-(about 1.1 GB), and for the larger one `python fetch_title_model.py --large` (about 2.5 GB, needs roughly 3 GB of free memory while it runs),
-then set `TITLE_MODEL_PATH` and `TITLE_MODEL_LARGE_PATH` in `.env` to the paths it prints. Everything then runs on your machine.
-`python -m app.doctor` shows their status. Any chat GGUF file works in either place.
+The model is optional and never trains or learns. It is loaded only while topics are being named, then freed. Without it, mixed topics are named
+by their most typical subject, and steps 1 to 3 still work. To switch it on: `pip install -r requirements-naming.txt`,
+`python fetch_title_model.py` (about 1.1 GB, one download), then set `TITLE_MODEL_PATH` in `.env` to the path it prints. Everything then runs on
+your machine. `python -m app.doctor` shows its status. Any small chat GGUF file works in its place.

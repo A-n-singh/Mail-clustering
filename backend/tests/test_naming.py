@@ -57,7 +57,7 @@ def test_mixed_cluster_uses_the_model_when_the_answer_passes():
     r = naming.name_cluster(msgs(MIXED), set(), f)
     assert (r.label, r.source) == ("Credit card and statement alerts", "model") and len(f.calls) == 1
     subjects, senders, attempt = f.calls[0]
-    assert subjects[0] == "Statement ending is ready" and senders == ["HDFC Bank"] and attempt == 0   # typical subjects, no numbers
+    assert subjects[0] == ("Statement ending is ready", 10) and senders == ["HDFC Bank"] and attempt == 0   # typical subjects, no numbers, with counts
 
 
 @pytest.mark.parametrize("bad,why", [
@@ -112,28 +112,6 @@ def test_a_rejected_answer_gets_one_retry_with_another_prompt():
     assert (r.label, r.source) == ("Statement and payment alerts", "model") and [c[2] for c in f.calls] == [0, 1]
 
 
-def test_after_two_rejections_the_larger_model_gets_one_try():
-    small, large = Fake("Holiday travel plans", "Holiday travel plans"), Fake("Bank statements and payments")
-    r = naming.name_cluster(msgs(MIXED), set(), small, large)
-    assert (r.label, r.source) == ("Bank statements and payments", "model-large")
-    assert len(small.calls) == 2 and [c[2] for c in large.calls] == [1]         # the stricter prompt, once
-
-
-def test_the_larger_model_is_not_called_when_the_main_one_passes():
-    r = naming.name_cluster(msgs(MIXED), set(), Fake("Credit card and statement alerts"), Boom())
-    assert r.source == "model"
-
-
-def test_if_the_larger_model_is_also_rejected_the_real_subject_is_used():
-    r = naming.name_cluster(msgs(MIXED), set(), Fake("Holiday plans", "Holiday plans"), Fake("Holiday plans"))
-    assert (r.label, r.source) == ("Statement ending is ready", "fallback")
-
-
-def test_a_larger_model_alone_is_enough_and_a_crash_in_it_is_survived():
-    assert naming.name_cluster(msgs(MIXED), set(), None, Fake("Bank statements and payments")).source == "model-large"
-    assert naming.name_cluster(msgs(MIXED), set(), None, Fake(RuntimeError("x"))).source == "fallback"
-
-
 def test_two_rejections_fall_back_to_the_most_typical_real_subject():
     f = Fake("Holiday travel plans", "Holiday travel plans")
     r = naming.name_cluster(msgs(MIXED), set(), f)
@@ -162,3 +140,84 @@ def test_rename_keeps_summaries_and_old_label_when_nothing_found(db):
     out = naming.rename(db, {1: [m.message_id for m in ms], 2: []}, {m.message_id: m for m in ms},
                         {1: ("order · amazon", "29 mails"), 2: ("x", "0 mails")}, namer=None)
     assert out[1] == ("Your order has shipped", "29 mails") and out[2] == ("x", "0 mails")
+
+
+class BowEmbedder:
+    """Bag-of-words hashing: texts that share most of their words are close. Deterministic, offline."""
+    def embed(self, texts):
+        import zlib
+
+        import numpy as np
+        out = np.zeros((len(texts), 512), dtype=np.float32)
+        for i, t in enumerate(texts):
+            for w in t.lower().replace("?", " ").split():
+                out[i, zlib.crc32(w.encode()) % 512] += 1
+        return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-9)
+
+
+@pytest.fixture
+def merge_at(monkeypatch):
+    monkeypatch.setattr(naming.settings, "title_merge_similarity", 0.85)      # bag-of-words scores are lower than real embeddings
+
+
+SHIPPED = ([("A <a@x.com>", "Your order has shipped")] * 25 + [("A <a@x.com>", "Your order has been shipped")] * 20
+           + [("A <a@x.com>", "Refund processed")] * 10)
+
+
+def test_merge_counts_rewordings_as_one_type(merge_at):
+    facts = naming.facts_of(msgs(SHIPPED), set(), BowEmbedder())
+    assert [(g.sample, g.count) for g in facts.groups] == [("Your order has shipped", 45), ("Refund processed", 10)]
+    assert len(facts.templates) == 3                       # the exact types are still known, for the checker
+
+
+def test_merge_lets_the_router_name_a_topic_the_exact_count_would_send_to_the_model(merge_at):
+    assert naming.name_cluster(msgs(SHIPPED), set(), None, None).source == "fallback"                 # 25 of 55 = 45%
+    r = naming.name_cluster(msgs(SHIPPED), set(), Boom(), BowEmbedder())                              # 45 of 55 = 82%
+    assert (r.label, r.source) == ("Your order has shipped", "template")
+
+
+def test_merge_never_joins_different_themes(merge_at):
+    rows = [("A <a@x.com>", "Your order has shipped")] * 20 + [("A <a@x.com>", "Delivered: order")] * 20 + [("A <a@x.com>", "Refund processed")] * 20
+    facts = naming.facts_of(msgs(rows), set(), BowEmbedder())
+    assert len(facts.groups) == 3 and facts.top_share < 0.7
+
+
+def test_merge_is_off_without_an_embedder_or_with_a_broken_one(merge_at):
+    assert len(naming.facts_of(msgs(SHIPPED), set(), None).groups) == 3
+
+    class Broken:
+        def embed(self, t):
+            raise RuntimeError("no model")
+    assert len(naming.facts_of(msgs(SHIPPED), set(), Broken()).groups) == 3
+
+
+THEMES = [("Your order has shipped", 30), ("Your parcel is out for delivery", 25), ("Delivered: your package", 20),
+          ("Rate your recent purchase", 15), ("Order confirmation received", 10), ("Refund processed", 8), ("Payment failed", 6)]
+
+
+def test_pick_by_meaning_gives_a_small_theme_a_seat(merge_at):
+    rows = [("A <a@x.com>", s) for s, n in THEMES for _ in range(n)]
+    f = Fake("Order and refund updates")
+    naming.name_cluster(msgs(rows), set(), f, BowEmbedder())
+    shown = dict(f.calls[0][0])
+    assert len(shown) == 5 and shown["Your order has shipped"] == 30                                  # biggest first, with its count
+    assert "Refund processed" in shown and "Payment failed" in shown                                 # small, different themes are not left out
+
+
+def test_without_an_embedder_the_model_sees_the_five_biggest():
+    rows = [("A <a@x.com>", s) for s, n in THEMES for _ in range(n)]
+    f = Fake("Order updates")
+    naming.name_cluster(msgs(rows), set(), f, None)
+    assert [s for s, _ in f.calls[0][0]] == [t[0] for t in THEMES[:5]]
+
+
+def test_the_prompt_shows_counts():
+    p = naming._prompt([("Your order has shipped", 55), ("Refund processed", 3)], ["Amazon"])
+    assert "- Your order has shipped (55 mails)" in p and "- Refund processed (3 mails)" in p and p.endswith("Heading:")
+
+
+def test_a_stray_one_off_does_not_take_a_seat(merge_at):
+    rows = [("A <a@x.com>", s) for s, n in THEMES for _ in range(n)] + [("A <a@x.com>", "Quokka zebra xylophone")]
+    f = Fake("Order updates")
+    naming.name_cluster(msgs(rows), set(), f, BowEmbedder())
+    assert "Quokka zebra xylophone" not in dict(f.calls[0][0])                                       # 1 of 115 mails, under 4%
