@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from app import actions as act
 from app.config import settings
 from app.embeddings import Embedder, ensure_embeddings, message_text
-from app.models import Embedding, Message, MessageTopic, Topic
+from app.models import Embedding, Message, MessageTopic, Topic, TopicRun
 from app.sync import run_sync
 from app.topics import after_sync, assign_new, recluster, recluster_due
 from conftest import FakeGmail, mail
@@ -198,3 +198,127 @@ def test_message_endpoint_returns_the_full_cleaned_text_for_the_reader(db):
     assert len(m["preview"]) == 600 and m["size_bytes"] == 4321 and m["sender_email"] == "alert@jobalert.indeed.com"
     assert m["date"] and m["gmail_link"] and "labels" in m
     assert c.get("/messages/nope").status_code == 404
+
+
+# ---------- hologram inside hologram ----------
+from app import hier  # noqa: E402
+
+
+def test_drill_into_topic_splits_again_and_lists_leaves(db):
+    from app.embeddings import set_embedder
+    set_embedder(FakeEmbedder())
+    build(db)
+    recluster(db, FakeEmbedder())
+    hier._cache.clear()
+    tid = max(db.scalars(select(Topic)).all(), key=lambda t: t.size).topic_id
+    v = hier.view(db, f"t{tid}")
+    assert v["path"] == f"t{tid}"
+    assert v["leaf"] or (len(v["topics"]) >= 2 and v["points"])
+    if not v["leaf"]:
+        assert all(p["t"] is None or p["t"] in {t["topic_id"] for t in v["topics"]} for p in v["points"])
+        first = v["topics"][0]["topic_id"]
+        rows = list(db.execute(hier.messages_query(db, f"t{tid}", first)))
+        assert len(rows) == v["topics"][0]["count"]
+        child = hier.view(db, f"t{tid}.{first}")   # one level deeper never crashes, small groups become a list
+        assert child["leaf"] or child["topics"]
+    else:
+        assert v["reason"]
+
+
+def test_kinds_group_across_senders_and_trashed_mail_drops_out(db):
+    from app.embeddings import set_embedder
+    set_embedder(FakeEmbedder())
+    build(db)
+    hier._cache.clear(); hier._subject_vecs.clear()
+    v = hier.view(db, "k")
+    assert not v["leaf"] and len(v["topics"]) >= 2
+    assert v["count"] == len(v["points"])
+    victim = v["points"][0]["i"]
+    m = db.get(Message, victim)
+    m.in_trash = True
+    db.commit()
+    again = hier.view(db, "k")
+    assert victim not in {p["i"] for p in again["points"]}
+
+
+def test_tiny_or_unknown_nodes(db):
+    import pytest
+    build(db)
+    with pytest.raises(KeyError):
+        hier.view(db, "zzz")
+    with pytest.raises(KeyError):
+        hier.view(db, "k.999")
+
+
+class OtherEmbedder(FakeEmbedder):
+    """A different model: another name and another vector size, like switching EMBED_MODEL."""
+    name = "fake-other"
+
+    def embed(self, texts):
+        out = np.zeros((len(texts), 64), dtype=np.float32)
+        for i, t in enumerate(texts):
+            for w in t.lower().replace(".", " ").split():
+                out[i, zlib.crc32(w.encode()) % 64] += 1
+        return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-9)
+
+
+def models_in_use(db):
+    return set(db.scalars(select(Embedding.model)))
+
+
+def test_a_changed_model_recomputes_every_vector(db):
+    from app.embeddings import stale_embeddings
+    build(db)
+    ensure_embeddings(db, FakeEmbedder())
+    assert models_in_use(db) == {"fake-hash"} and stale_embeddings(db, "fake-hash") == 0
+    assert stale_embeddings(db, "fake-other") == 95                          # all of them would be stale under the new model
+    assert ensure_embeddings(db, OtherEmbedder()) == 95                      # all re-embedded, none skipped
+    assert models_in_use(db) == {"fake-other"} and stale_embeddings(db, "fake-other") == 0
+    assert len(db.get(Embedding, "m1").vector) == 64 * 4                     # the new model's vector size
+    assert ensure_embeddings(db, OtherEmbedder()) == 0                       # nothing left to do
+
+
+def test_an_interrupted_switch_resumes_where_it_stopped(db):
+    from app.embeddings import stale_embeddings
+    build(db)
+    ensure_embeddings(db, FakeEmbedder())
+    ensure_embeddings(db, OtherEmbedder(), batch=10)
+    for e in list(db.scalars(select(Embedding)))[:30]:                       # pretend the run died: 30 mails are back on the old model
+        e.model = "fake-hash"
+    db.commit()
+    assert stale_embeddings(db, "fake-other") == 30
+    assert ensure_embeddings(db, OtherEmbedder()) == 30                      # only those
+
+
+def test_trashed_mail_does_not_count_as_stale_so_it_cannot_force_endless_rebuilds(db):
+    from app.embeddings import stale_embeddings
+    g = build(db)
+    ensure_embeddings(db, FakeEmbedder())
+    act.perform(db, g, ["m1", "m2"], "trash", confirmed=True)
+    assert stale_embeddings(db, "fake-other") == 93
+
+
+def test_load_matrix_never_mixes_two_models(db):
+    from app.embeddings import load_matrix
+    build(db)
+    ensure_embeddings(db, FakeEmbedder())
+    e = db.get(Embedding, "m1")
+    e.model, e.vector = "fake-other", np.ones(64, dtype=np.float32).tobytes()          # one stray vector from another model
+    db.commit()
+    ids, X = load_matrix(db, model="fake-hash")
+    assert "m1" not in ids and X.shape == (94, 1024)                         # no crash on mixed sizes, no mixing
+
+
+def test_changing_the_model_forces_a_full_rebuild_at_the_next_sync_even_when_one_is_not_due(db):
+    build(db)
+    after_sync(db, FakeEmbedder())
+    runs = db.scalar(select(func.count()).select_from(TopicRun))
+    assert recluster_due(db) is False
+    after_sync(db, FakeEmbedder())                                           # same model: only the cheap path, no new rebuild
+    assert db.scalar(select(func.count()).select_from(TopicRun)) == runs
+    after_sync(db, OtherEmbedder())                                          # model changed: rebuild now, from fresh vectors
+    assert db.scalar(select(func.count()).select_from(TopicRun)) == runs + 1
+    assert models_in_use(db) == {"fake-other"}
+    assert db.scalar(select(func.count()).select_from(MessageTopic)) > 0
+    after_sync(db, OtherEmbedder())                                          # and it settles: no rebuild loop
+    assert db.scalar(select(func.count()).select_from(TopicRun)) == runs + 1

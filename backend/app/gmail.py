@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Protocol
+from urllib.parse import quote
 
 
 @dataclass
@@ -186,6 +187,12 @@ def _extract_body(payload) -> tuple[str, bool]:
         elif p.get("mimeType") == "text/html":
             html = html or text
     return (plain, False) if plain else (html, True)
+
+
+def gmail_web_url(thread_id: str, email: str) -> str:
+    """Link that opens a mail in Gmail. '#all' (All Mail) works for inbox, archived and labelled mail alike,
+    and authuser picks the right Google account when several are signed in."""
+    return f"https://mail.google.com/mail/?authuser={quote(email)}#all/{thread_id}"
 
 
 def parse_sender(raw: str) -> tuple[str, str, str]:

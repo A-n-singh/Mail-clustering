@@ -33,7 +33,32 @@ the most distinctive words in the cluster (no LLM). 2D coordinates are stored, s
 New mail is placed into the nearest topic after every sync; topics are rebuilt weekly (`RECLUSTER_DAYS`) or with **Rebuild topics**.
 Topic IDs stay stable across rebuilds. Lasso-select dots to trash/archive/star in bulk (same confirm + Undo + protection rules).
 
+### Changing the embedding model
+`EMBED_MODEL` can be changed at any time (the default `BAAI/bge-small-en-v1.5` was kept after a benchmark of nine models). Each stored vector remembers
+which model made it. At the next sync, if any mail carries a vector from a different model, **every vector is recomputed and the topics are rebuilt
+right away** (not at the weekly rebuild), so vectors of two models are never mixed. It takes a few minutes for a few thousand mails, can be stopped and
+resumed (only what is still stale is redone), and settles after one rebuild. `python -m app.doctor` shows whether your stored vectors match.
+
 ### Look and feel
 The dashboard uses a dark "HUD" theme. **Topic map → Hologram 3D** shows every mail as a glowing node in 3D, each topic wrapped in a
 rotating wireframe shell with a floating label. Drag to orbit, wheel to zoom, hover to scan a mail, click to open it, and use
-**Lasso** to select nodes for bulk actions. The flat 2D map and a plain list are one click away.
+**Lasso** to select nodes for bulk actions. A plain list is one click away. The **Groups** tab is a hologram too: one ball per sender, and going inside a sender shows one ball per kind of subject.
+
+### Topic headings
+A topic is named by a small fixed pipeline, `backend/app/naming.py`:
+1. **Facts.** Subjects are counted by type, with order numbers collapsed ("Your order #123 has shipped" and "#456" are one type).
+2. **Merge near-copies.** With the embedding model the topics already use, types that mean the same ("Your order has shipped" / "Your order has
+   been shipped") are counted as one. Only close copies merge (`TITLE_MERGE_SIMILARITY`, default 0.93), never different themes.
+3. **Router.** If one type covers at least 70% of the topic, that subject (numbers dropped) is the heading. No model is used.
+4. **Pick by meaning.** Otherwise the model is shown up to 5 subjects, one per theme and biggest first, each with its mail count.
+5. **Namer.** A local model (Qwen2.5-1.5B-Instruct) writes at most 6 words.
+6. **Checker.** Plain code rejects an empty or long heading, numbers, a bare sender name, alarm words when the topic has no urgent mail, a heading
+   that just copies one subject of a mixed topic, or one that neither shares a word with the subjects nor is close to them in meaning
+   (`TITLE_MIN_SIMILARITY`, default 0.75).
+7. **Retry once, then a real subject.** The model gets one more try with a different prompt; after that the heading is the most typical real
+   subject. The old keyword label is the last resort.
+
+The model is optional and never trains or learns. It is loaded only while topics are being named, then freed. Without it, mixed topics are named
+by their most typical subject, and steps 1 to 3 still work. To switch it on: `pip install -r requirements-naming.txt`,
+`python fetch_title_model.py` (about 1.1 GB, one download), then set `TITLE_MODEL_PATH` in `.env` to the path it prints. Everything then runs on
+your machine. `python -m app.doctor` shows its status. Any small chat GGUF file works in its place.

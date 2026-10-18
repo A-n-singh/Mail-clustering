@@ -230,3 +230,35 @@ def test_stop_endpoint_and_status():
         r = s.query(SyncRun).first(); r.ended, r.error, r.fetched = __import__("datetime").datetime.now(), control.STOPPED, 40; s.commit()
     st = c.get("/sync/status").json()
     assert st["stopped"] is True and st["error"] is None and st["running"] is False and st["fetched"] == 40
+
+
+def test_open_in_gmail_link_works_for_any_label_and_the_right_account(db, monkeypatch):
+    from urllib.parse import urlparse
+    from app.config import settings
+    from app.gmail import gmail_web_url
+    url = gmail_web_url("19a1b2c3d4e5f607", "me+tag@gmail.com")
+    assert url == "https://mail.google.com/mail/?authuser=me%2Btag%40gmail.com#all/19a1b2c3d4e5f607"
+    assert urlparse(url).fragment == "all/19a1b2c3d4e5f607"      # All Mail, so archived/labelled mail opens too, not only Inbox
+    assert "#inbox" not in url and "/u/0/" not in url             # no assumption about which account is signed in first
+
+
+def test_api_builds_the_link_when_reading_so_old_rows_are_fixed_too(monkeypatch):
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app import auth
+    from app.db import Base, get_db
+    from app.main import app
+    e = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(e)
+    S = sessionmaker(bind=e, expire_on_commit=False)
+    with S() as s:
+        run_sync(s, FakeGmail([mail("g1", "Bob <bob@acme.com>", "hi", "hello")]))
+        s.query(Message).update({"gmail_link": "https://mail.google.com/mail/u/0/#inbox/OLD"})   # a row saved by the old code
+        s.commit()
+    app.dependency_overrides[get_db] = lambda: S()
+    c = TestClient(app)
+    c.cookies.set("session", auth.make_session("me@example.com"))
+    link = c.get("/messages/g1").json()["gmail_link"]
+    assert link == "https://mail.google.com/mail/?authuser=me%40example.com#all/tg1" and "OLD" not in link

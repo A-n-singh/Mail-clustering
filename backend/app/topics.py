@@ -10,8 +10,9 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from . import control
+from . import naming
 from .config import settings
-from .embeddings import Embedder, ensure_embeddings, get_embedder, load_matrix
+from .embeddings import Embedder, ensure_embeddings, get_embedder, load_matrix, stale_embeddings
 from .models import Message, MessageTopic, Score, Topic, TopicRun
 
 _STOP = set("""the and for you your are with this that from have has was were will not but all can our out new get
@@ -80,8 +81,9 @@ def _recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
     db.add(run)
     db.commit()
     try:
-        ensure_embeddings(db, embedder or get_embedder())
-        ids, X = load_matrix(db)
+        embedder = embedder or get_embedder()
+        ensure_embeddings(db, embedder)
+        ids, X = load_matrix(db, model=embedder.name)
         run.messages = len(ids)
         if len(ids) < settings.topic_min_messages:
             run.ended = datetime.now(timezone.utc)
@@ -93,7 +95,7 @@ def _recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
         xyz = _reduce(X, 3, nn)  # stored once; the flat map uses x,y and the hologram uses x,y,z
         labels = HDBSCAN(min_cluster_size=settings.topic_min_cluster_size).fit_predict(Z)
         labels = demote_outliers(X, labels, settings.topic_min_cluster_size)
-        _store(db, run, ids, xyz, labels)
+        _store(db, run, ids, xyz, labels, embedder)
     except Exception as e:
         db.rollback()
         run = db.merge(run)
@@ -103,7 +105,7 @@ def _recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
     return run
 
 
-def _store(db: Session, run: TopicRun, ids: list[str], xyz: np.ndarray, labels: np.ndarray):
+def _store(db: Session, run: TopicRun, ids: list[str], xyz: np.ndarray, labels: np.ndarray, embedder=None):
     msgs = {m.message_id: m for m in db.scalars(select(Message).where(Message.message_id.in_(ids)))}
     members: dict[int, list[str]] = defaultdict(list)
     for mid, lab in zip(ids, labels):
@@ -131,7 +133,7 @@ def _store(db: Session, run: TopicRun, ids: list[str], xyz: np.ndarray, labels: 
 
     docs = {l: " ".join(f"{msgs[m].subject_key} {msgs[m].sender}" for m in mids) for l, mids in members.items()}
     senders = {l: Counter(msgs[m].sender for m in mids) for l, mids in members.items()}
-    names = _label_clusters(docs, senders)
+    names = naming.rename(db, members, msgs, _label_clusters(docs, senders), embedder=embedder)
     for lab, t in topic_of.items():
         t.label, t.summary = names[lab]
         t.size = len(members[lab])
@@ -151,12 +153,13 @@ def _store(db: Session, run: TopicRun, ids: list[str], xyz: np.ndarray, labels: 
 def assign_new(db: Session, embedder: Embedder | None = None, k: int = 5, min_sim: float = 0.5) -> int:
     """Daily step: put mail that arrived since the last clustering into the nearest existing topic.
     Coordinates are the average of the nearest neighbours', so no UMAP model needs to be kept."""
-    ensure_embeddings(db, embedder or get_embedder())
+    embedder = embedder or get_embedder()
+    ensure_embeddings(db, embedder)
     placed = {r[0] for r in db.execute(select(MessageTopic.message_id)).all()}
-    base_ids, Xb = load_matrix(db, list(placed)) if placed else ([], None)
+    base_ids, Xb = load_matrix(db, list(placed), embedder.name) if placed else ([], None)
     if not base_ids:
         return 0
-    new_ids, Xn = load_matrix(db)
+    new_ids, Xn = load_matrix(db, model=embedder.name)
     keep = [i for i, m in enumerate(new_ids) if m not in placed]
     if not keep:
         return 0
@@ -213,7 +216,10 @@ def after_sync(db: Session, embedder: Embedder | None = None):
         return
     prune_orphans(db)
     db.commit()
-    if recluster_due(db):
+    embedder = embedder or get_embedder()
+    # EMBED_MODEL changed: every vector is recomputed and the topics are rebuilt now (old topics were built from the old model's
+    # vectors, and new mail could not be placed next to them), not at the next weekly rebuild.
+    if stale_embeddings(db, embedder.name) > 0 or recluster_due(db):
         recluster(db, embedder)
     else:
         assign_new(db, embedder)

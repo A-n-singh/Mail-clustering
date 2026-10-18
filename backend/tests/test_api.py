@@ -56,3 +56,37 @@ def test_filters_and_status():
     assert c.get("/sync/status").json()["running"] is False
     cid = c.get("/groups?sender=shop").json()[0]["cluster_id"]
     assert len(c.get(f"/groups/{cid}/messages").json()) == 1
+
+
+def test_groups_hologram_shapes_and_filters():
+    c, _ = client()
+    c.cookies.set("session", auth.make_session("me@example.com"))
+    h = c.get("/groups/hologram").json()
+    assert {t["label"] for t in h["topics"]} == {"corp.com", "shop.com"}
+    assert len(h["points"]) == 2
+    assert all({"i", "x", "y", "z", "t", "s", "f"} <= set(p) for p in h["points"])
+    assert {p["t"] for p in h["points"]} == {t["topic_id"] for t in h["topics"]}
+    assert c.get("/groups/hologram").json() == h                      # same picture every time
+    only = c.get("/groups/hologram?sender=shop").json()
+    assert [t["label"] for t in only["topics"]] == ["shop.com"] and len(only["points"]) == 1
+    assert c.get("/groups/hologram?label=NOPE").json() == {"points": [], "topics": []}
+
+
+def test_group_hologram_splits_by_subject_template():
+    c, _ = client()
+    c.cookies.set("session", auth.make_session("me@example.com"))
+    cid = c.get("/groups?sender=shop").json()[0]["cluster_id"]
+    h = c.get(f"/groups/{cid}/hologram").json()
+    assert len(h["points"]) == 1 and h["topics"][0]["count"] == 1 and h["points"][0]["t"] == h["topics"][0]["topic_id"]
+    assert c.get(f"/groups/{cid}/hologram?label=NOPE").json() == {"points": [], "topics": []}
+
+
+def test_holo_layout_is_stable_and_keeps_groups_apart():
+    from app.holo_layout import layout
+    g = [("a", [f"a{i}" for i in range(30)]), ("b", [f"b{i}" for i in range(10)]), ("c", ["c0"])]
+    p = layout(g)
+    assert p == layout(list(reversed(g))) and len(p) == 41
+    mid = lambda ids: [sum(p[i][k] for i in ids) / len(ids) for k in range(3)]
+    ca, cb = mid(g[0][1]), mid(g[1][1])
+    assert sum((x - y) ** 2 for x, y in zip(ca, cb)) ** 0.5 > 0.5
+    assert layout([]) == {}
