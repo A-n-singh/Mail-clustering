@@ -29,7 +29,7 @@ with sync_playwright() as p:
         pg.mouse.move(box["x"] + box["width"] * fx, box["y"] + box["height"] * fy, steps=4)
     pg.mouse.up(); pg.wait_for_selector("text=/\\d+ selected/"); print("lasso:", pg.inner_text("text=/\\d+ selected/"))
     pg.screenshot(path=f"{S}/h4-lasso.png")
-    pg.click("nav.tabs >> text=Groups"); pg.wait_for_selector("svg.bubbles circle"); pg.wait_for_timeout(500); pg.screenshot(path=f"{S}/h5-groups.png")
+    pg.click("nav.tabs >> text=Groups"); pg.wait_for_selector("[aria-label='Groups'] button"); pg.wait_for_timeout(500); pg.screenshot(path=f"{S}/h5-groups.png")
     pg.click("nav.tabs >> text=Needs action"); pg.wait_for_timeout(800); pg.screenshot(path=f"{S}/h6-needs.png")
     print("errors:", errs[:5])
     b.close()

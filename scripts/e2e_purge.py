@@ -9,8 +9,8 @@ with sync_playwright() as p:
     pg.goto("http://localhost:5173"); pg.click("a.btn"); pg.wait_for_selector("button:has-text('Sync now')")
     pg.click("button:has-text('Sync now')")
     pg.wait_for_function("document.querySelector('.stat b').textContent > 0 && !document.querySelector('[role=status]')", timeout=30000)
-    pg.click("nav.tabs >> text=Groups"); pg.wait_for_selector("svg.bubbles circle")
-    pg.locator("svg.bubbles circle").first.dispatch_event("click"); pg.wait_for_selector("text=All groups")
+    pg.click("nav.tabs >> text=Groups"); pg.wait_for_selector("[aria-label='Groups'] button")
+    pg.locator("[aria-label='Groups'] button").first.dispatch_event("click"); pg.wait_for_selector("text=All groups")
     pg.click("text=Select all"); 
     pg.click("button:has-text('trash selected')"); pg.click("button:has-text('Confirm')"); pg.wait_for_selector(".toast")
     pg.click("nav.tabs >> text=Trash"); pg.wait_for_selector("text=in Trash"); print(pg.inner_text(".card").split("\n")[0])

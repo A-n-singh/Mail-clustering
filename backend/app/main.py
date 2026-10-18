@@ -20,6 +20,7 @@ from .security import decrypt, encrypt
 from .capacity import refill
 from . import control
 from . import hier
+from . import holo_layout
 from . import topics as topics_mod
 from .purge import PurgeError, purge_trash, trash_summary
 from .sync import close_orphan_runs, run_sync, sync_in_progress
@@ -249,6 +250,56 @@ def groups(db: Session = Depends(get_db), _: str = Depends(auth.current_user),
          .group_by(Cluster.cluster_id, Cluster.label, Cluster.gmail_total))
     return [{"cluster_id": i, "label": l, "count": c, "importance": round(a or 0), "bytes": b or 0,
              "gmail_total": t or c} for i, l, c, a, b, t in db.execute(q)]
+
+
+@app.get("/groups/hologram")
+def groups_hologram(db: Session = Depends(get_db), _: str = Depends(auth.current_user),
+                    since_days: int | None = None, date_from: date | None = None, date_to: date | None = None,
+                    sender: str | None = None, label: str | None = None, min_score: int = 0):
+    """The Groups tab as a hologram: same data as /groups, but every mail is a node. Same shape as /map
+    (points i, x, y, z, t, s, f + topics) with t = the group's id."""
+    q = (select(Cluster.cluster_id, Cluster.label, Message.message_id, Message.subject, Message.sender)
+         .join(MessageCluster, MessageCluster.cluster_id == Cluster.cluster_id)
+         .join(Message, Message.message_id == MessageCluster.message_id)
+         .join(Score, Score.message_id == Message.message_id)
+         .where(Message.in_trash == False, *_filters(since_days, date_from, date_to, sender, label, min_score))  # noqa: E712
+         .limit(30_000))
+    ids: dict[int, list[str]] = {}
+    labels: dict[int, str] = {}
+    meta: dict[str, tuple[int, str, str]] = {}
+    for cid, lab, mid, subj, snd in db.execute(q):
+        ids.setdefault(cid, []).append(mid)
+        labels[cid] = lab
+        meta[mid] = (cid, subj, snd)
+    pos = holo_layout.layout([(str(c), m) for c, m in ids.items()])
+    return {"points": [{"i": m, "x": round(pos[m][0], 4), "y": round(pos[m][1], 4), "z": round(pos[m][2], 4),
+                        "t": c, "s": s_, "f": f} for m, (c, s_, f) in meta.items()],
+            "topics": [{"topic_id": c, "label": labels[c], "count": len(m)}
+                       for c, m in sorted(ids.items(), key=lambda kv: -len(kv[1]))]}
+
+
+@app.get("/groups/{cluster_id}/hologram")
+def group_hologram(cluster_id: int, since_days: int | None = None, date_from: date | None = None,
+                   date_to: date | None = None, sender: str | None = None, label: str | None = None,
+                   min_score: int = 0, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    """Inside one group: its mails as a hologram, one ball per subject template ('Your order # has shipped').
+    The 12 biggest templates get a ball; the rest are loose grey nodes (t = null)."""
+    q = (select(Message.message_id, Message.subject, Message.sender, Message.subject_key)
+         .join(MessageCluster, MessageCluster.message_id == Message.message_id)
+         .outerjoin(Score, Score.message_id == Message.message_id)
+         .where(MessageCluster.cluster_id == cluster_id, Message.in_trash == False,  # noqa: E712
+                *_filters(since_days, date_from, date_to, sender, label, min_score)))
+    rows = list(db.execute(q))
+    by_key: dict[str, list[str]] = {}
+    for mid, _s, _f, key in rows:
+        by_key.setdefault(key or "(no subject)", []).append(mid)
+    top = sorted(by_key, key=lambda k: -len(by_key[k]))[:12]
+    tid = {k: n for n, k in enumerate(top, 1)}
+    pos = holo_layout.layout([(k, m) for k, m in by_key.items()])
+    key_of = {mid: (key or "(no subject)") for mid, _s, _f, key in rows}
+    return {"points": [{"i": mid, "x": round(pos[mid][0], 4), "y": round(pos[mid][1], 4), "z": round(pos[mid][2], 4),
+                        "t": tid.get(key_of[mid]), "s": subj, "f": snd} for mid, subj, snd, _k in rows],
+            "topics": [{"topic_id": tid[k], "label": k[:48], "count": len(by_key[k])} for k in top]}
 
 
 @app.get("/groups/{cluster_id}/subjects")

@@ -36,4 +36,4 @@ Topic IDs stay stable across rebuilds. Lasso-select dots to trash/archive/star i
 ### Look and feel
 The dashboard uses a dark "HUD" theme. **Topic map → Hologram 3D** shows every mail as a glowing node in 3D, each topic wrapped in a
 rotating wireframe shell with a floating label. Drag to orbit, wheel to zoom, hover to scan a mail, click to open it, and use
-**Lasso** to select nodes for bulk actions. The flat 2D map and a plain list are one click away.
+**Lasso** to select nodes for bulk actions. A plain list is one click away. The **Groups** tab is a hologram too: one ball per sender, and going inside a sender shows one ball per kind of subject.

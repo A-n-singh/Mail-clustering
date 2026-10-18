@@ -1,11 +1,13 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, fmtBytes } from "./api.js";
-import Bubbles from "./Bubbles.jsx";
-import ClusterMap, { GREY, topicColor } from "./ClusterMap.jsx";
-import Hologram from "./Hologram.jsx";
+import { GREY, topicColor } from "./ClusterMap.jsx";
+import Hologram, { holoColor } from "./Hologram.jsx";
 import Filters, { EMPTY } from "./Filters.jsx";
 import Explain from "./Explain.jsx";
 import { ConfirmModal, MailRow, Reader, useMailBody } from "./MailList.jsx";
+
+const NONE = new Set();
+const noop = () => {};
 
 function usePoll(fn, ms, deps = []) {
   const [data, setData] = useState(null);
@@ -173,16 +175,30 @@ function Groups({ version, act }) {
   const [filters, setFilters] = useState(EMPTY);
   const [picked, setPicked] = useState(null);
   const [groups, , err] = usePoll(() => api.groups(filters), 0, [filters, version]);
+  const [holo, , holoErr] = usePoll(() => api.groupsHolo(filters), 0, [filters, version]);
   const pick = useCallback((g) => setPicked(g), []);
+  const byId = useMemo(() => new Map((groups || []).map((g) => [g.cluster_id, g])), [groups]);
+  const groupOfMail = useMemo(() => new Map((holo?.points || []).map((p) => [p.i, p.t])), [holo]);
+  const goInside = (cid) => { const g = byId.get(cid); if (g) pick(g); };
   return (
     <>
       <Filters value={filters} onChange={setFilters} />
-      {err && <p className="err">{err.message}</p>}
+      {(err || holoErr) && <p className="err">{(err || holoErr).message}</p>}
       {!picked ? (
         <div className="card">
           <Explain id="groups">
-          <div className="legend">Bubble size = mail count · colour = importance <i /> low → high · click a bubble to open it</div>
-          {groups && groups.length ? <Bubbles groups={groups} onPick={pick} /> : <p className="muted">No groups match these filters.</p>}
+          <div className="legend">Each ball is one sender group, every dot is a mail · tap a ball to fly to it, tap it again to go inside</div>
+          {holo && holo.points.length
+            ? <Hologram points={holo.points} topics={holo.topics} focus={null} selected={NONE} onSelect={noop}
+                onOpen={(mid) => goInside(groupOfMail.get(mid))} onDrill={goInside} />
+            : <p className="muted">{holo ? "No groups match these filters." : "Loading…"}</p>}
+          {holo && holo.topics.length > 0 && (
+            <div className="topic-legend" role="group" aria-label="Groups">
+              {holo.topics.map((t, i) => (
+                <button key={t.topic_id} onClick={() => goInside(t.topic_id)}><i style={{ background: holoColor(i) }} />{t.label} ({t.count})</button>
+              ))}
+            </div>
+          )}
           {groups && groups.some((g) => g.gmail_total > g.count) && (
             <p className="muted">Some groups are capped at 360 kept mails; older mail is pulled in as you clean.</p>
           )}
@@ -200,6 +216,8 @@ function Drill({ group, filters, version, act, onBack }) {
   const [subjects] = usePoll(() => api.groupSubjects(group.cluster_id), 0, [group.cluster_id, version]);
   const [sel, setSel] = useState(new Set());
   const [view, setView] = useState("mails");
+  const [inner] = usePoll(() => api.groupHolo(group.cluster_id, filters), 0, [group.cluster_id, filters, version]);
+  const [open, setOpen] = useState(null);
   useEffect(() => setSel(new Set()), [version]);
   const toggle = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const ids = [...sel];
@@ -211,6 +229,20 @@ function Drill({ group, filters, version, act, onBack }) {
         <button className={view === "mails" ? "on" : ""} onClick={() => setView("mails")}>Mails</button>
         <button className={view === "subjects" ? "on" : ""} onClick={() => setView("subjects")}>By subject</button>
       </nav>
+      {inner && inner.points.length >= 3 && (
+        <>
+          <div className="legend">Inside {group.label}: one ball per kind of subject · drag to orbit, lasso to select dots, tap a dot to read it</div>
+          <Hologram points={inner.points} topics={inner.topics} focus={null} selected={sel} onSelect={setSel}
+            onOpen={async (mid) => setOpen(await api.message(mid))} far />
+        </>
+      )}
+      {open && (
+        <div className="sidepanel" role="region" aria-label="Mail">
+          <button onClick={() => setOpen(null)} style={{ float: "right" }}>✕</button>
+          <MailRow m={open} onAct={act} />
+          <p className="muted" style={{ whiteSpace: "pre-wrap" }}>{open.preview || open.snippet}</p>
+        </div>
+      )}
       <div className="filters">
         <b>{ids.length} selected</b>
         <button disabled={!mails} onClick={() => setSel(new Set(mails.map((m) => m.message_id)))}>Select all</button>
@@ -232,7 +264,7 @@ function TopicMap({ version, act }) {
   const [map, reloadMap] = usePoll(api.map, 0, [version]);
   const [status, reloadStatus] = usePoll(api.topicsStatus, 3000, [version]);
   const [focus, setFocus] = useState(null);   // topic id, 0 = review bucket, null = all
-  const [view, setView] = useState("holo");    // holo | flat | list
+  const [view, setView] = useState("holo");    // holo | list
   const [sel, setSel] = useState(new Set());
   const [open, setOpen] = useState(null);
   // "hologram inside hologram": trail = the groups you went into; mode "kinds" = all mail grouped by what the subject says
@@ -302,7 +334,6 @@ function TopicMap({ version, act }) {
           )}
           <nav className="tabs">
             <button className={view === "holo" ? "on" : ""} onClick={() => setView("holo")}>Hologram 3D</button>
-            <button className={view === "flat" ? "on" : ""} onClick={() => setView("flat")}>Flat map</button>
             <button className={view === "list" ? "on" : ""} onClick={() => { setView("list"); if (focus == null) setFocus(topics[0]?.topic_id ?? 0); }}>List</button>
             <button disabled={status?.running} onClick={async () => { await api.recluster(); reloadStatus(); }}>{status?.running ? "Rebuilding…" : "Rebuild topics"}</button>
           </nav>
@@ -328,12 +359,10 @@ function TopicMap({ version, act }) {
         </>
       )}
 
-      {!noTopics && (view === "holo" || view === "flat") && (nested ? hierReady && !leaf : map) && (
+      {!noTopics && view === "holo" && (nested ? hierReady && !leaf : map) && (
         <>
         <Explain id="map">
-          {view === "holo"
-            ? <Hologram points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} onDrill={goInside} far={nested} />
-            : <ClusterMap points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} />}
+          <Hologram points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} onDrill={goInside} far={nested} />
         </Explain>
           {focus != null && (
             <div className="filters" style={{ marginTop: 10 }}>
