@@ -31,14 +31,14 @@ function labelSprite(text, color) {
  * Holographic 3D cluster view (three.js). Every mail is a glowing node at its stored 3D position; each topic is wrapped in a
  * rotating wireframe shell with a floating label. Drag = orbit, wheel = zoom, hover = subject, click = open, lasso = select.
  */
-export default function Hologram({ points, topics, focus, selected, onSelect, onOpen }) {
+export default function Hologram({ points, topics, focus, selected, onSelect, onOpen, onDrill, far }) {
   const wrap = useRef(), mount = useRef(), overlay = useRef();
   const api = useRef({});
   const [tip, setTip] = useState(null);
   const [lasso, setLasso] = useState(false);
   const [spin, setSpin] = useState(true);
   const stateRef = useRef({});
-  stateRef.current = { points, focus, selected, lasso, onSelect, onOpen };
+  stateRef.current = { points, focus, selected, lasso, onSelect, onOpen, onDrill, far };
 
   const topicIndex = useMemo(() => new Map(topics.map((t, i) => [t.topic_id, i])), [topics]);
 
@@ -54,7 +54,7 @@ export default function Hologram({ points, topics, focus, selected, onSelect, on
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x03101a, 0.22);
     const camera = new THREE.PerspectiveCamera(55, w / H, 0.05, 50);
-    camera.position.set(0.2, 0.7, 2.5);
+    camera.position.set(0.2, 0.7, stateRef.current.far ? 3.8 : 2.5);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true; controls.autoRotate = true; controls.autoRotateSpeed = 0.7; controls.maxDistance = 7; controls.minDistance = 0.8;
 
@@ -85,6 +85,7 @@ export default function Hologram({ points, topics, focus, selected, onSelect, on
 
     // topic shells + labels
     const shells = [];
+    const hits = [];   // invisible spheres: clicking an empty part of a topic goes inside it
     const byTopic = new Map();
     points.forEach((p, i) => { if (p.t != null) (byTopic.get(p.t) || byTopic.set(p.t, []).get(p.t)).push(i); });
     topics.forEach((t, ti) => {
@@ -100,7 +101,9 @@ export default function Hologram({ points, topics, focus, selected, onSelect, on
       const ring = new THREE.Mesh(new THREE.RingGeometry(r * 1.12, r * 1.14, 64), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }));
       ring.rotation.x = Math.PI / 2.4;
       const label = labelSprite(`${t.label} · ${t.count}`, holoColor(ti)); label.position.set(0, r + 0.12, 0);
-      g.add(wire, ring, label); scene.add(g);
+      const hit = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }));
+      hit.userData.topic = t.topic_id;
+      g.add(wire, ring, label, hit); scene.add(g); hits.push(hit);
       shells.push({ g, wire, ring, speed: 0.1 + (ti % 5) * 0.04, topic: t.topic_id });
     });
 
@@ -126,18 +129,26 @@ export default function Hologram({ points, topics, focus, selected, onSelect, on
       const hits = ray.intersectObject(cloud);
       return hits.length ? hits[0].index : -1;
     };
+    const pickShell = (e) => {
+      const r = rect(); mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(mouse, camera);
+      const h = ray.intersectObjects(hits, false);
+      return h.length ? h[0].object.userData.topic : null;
+    };
     const dom = renderer.domElement;
     dom.addEventListener("pointermove", (e) => {
       if (stateRef.current.lasso) return;
       const i = pick(e);
       const r = rect();
       setTip(i >= 0 ? { p: points[i], left: e.clientX - r.left, top: e.clientY - r.top } : null);
-      dom.style.cursor = i >= 0 ? "pointer" : "grab";
+      dom.style.cursor = i >= 0 ? "pointer" : stateRef.current.onDrill && pickShell(e) != null ? "zoom-in" : "grab";
     });
     dom.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY]; });
     dom.addEventListener("pointerup", (e) => {
       if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 4 && !stateRef.current.lasso) {
-        const i = pick(e); if (i >= 0) stateRef.current.onOpen(points[i].i);
+        const i = pick(e);
+        if (i >= 0) stateRef.current.onOpen(points[i].i);
+        else if (stateRef.current.onDrill) { const tid = pickShell(e); if (tid != null) stateRef.current.onDrill(tid); }
       }
       down = null;
     });
@@ -232,9 +243,9 @@ export default function Hologram({ points, topics, focus, selected, onSelect, on
       <div className="holo-controls">
         <button className={lasso ? "primary" : ""} aria-pressed={lasso} onClick={() => setLasso(!lasso)}>{lasso ? "LASSO ARMED" : "Lasso"}</button>
         <button className={spin ? "on" : ""} onClick={() => setSpin(!spin)}>{spin ? "Spin: on" : "Spin: off"}</button>
-        <button onClick={() => { const a = api.current; if (a.camera) { a.camera.position.set(0.2, 0.7, 2.5); a.controls.target.set(0, 0, 0); } }}>Recenter</button>
+        <button onClick={() => { const a = api.current; if (a.camera) { a.camera.position.set(0.2, 0.7, stateRef.current.far ? 3.8 : 2.5); a.controls.target.set(0, 0, 0); } }}>Recenter</button>
       </div>
-      <div className="holo-hint">DRAG ORBIT · WHEEL ZOOM · HOVER SCAN · CLICK OPEN</div>
+      <div className="holo-hint">DRAG ORBIT · WHEEL ZOOM · HOVER SCAN · CLICK A MAIL TO OPEN · CLICK A BALL TO GO INSIDE</div>
       {tip && (
         <div className="tip holo-tip" style={{ left: Math.min(tip.left + 14, (wrap.current?.clientWidth || 900) - 250), top: tip.top + 14 }}>
           <b>{tip.p.s || "(no subject)"}</b><br /><span>{tip.p.f}</span>

@@ -17,6 +17,7 @@ const TEXTS = {
     ["What you are looking at", "Your mail placed by meaning, not by sender. Mails that say similar things sit close together and share a colour. Each coloured group is a topic."],
     ["How topics are made", "Each mail is turned into a set of numbers from its sender name, subject and a short snippet, by a small model that runs on your own server. Dense neighbourhoods become topics and are named from their most common words. Hologram 3D and Flat map show the same data."],
     ["Grey dots and the review bucket", "Mail that fits no topic stays grey. The Review bucket lists it, most important first, so nothing is hidden."],
+    ["Going inside", "Click a ball, or choose a topic and press Go inside, and the mails of that topic are grouped again into a new hologram of smaller groups. You can keep going until a group is too small to split, then you see its mails as a list. The path above the hologram shows where you are, and Back or any step in it takes you out. Topics groups by sender name, subject and snippet. Kinds groups all mail by what the subject says, so delivery mail from different shops lands together, and going inside a kind can then split it by sender. It all runs on your server and the first time can take up to a minute."],
     ["Using it", "Click a topic button to focus it. Drag to turn, scroll to zoom, hover to see a subject and click to open the mail. Lasso selects many mails at once, then pick Trash, Archive and so on. Topics rebuild every week, or press Rebuild topics."],
   ],
   digest: [

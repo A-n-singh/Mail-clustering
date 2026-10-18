@@ -198,3 +198,53 @@ def test_message_endpoint_returns_the_full_cleaned_text_for_the_reader(db):
     assert len(m["preview"]) == 600 and m["size_bytes"] == 4321 and m["sender_email"] == "alert@jobalert.indeed.com"
     assert m["date"] and m["gmail_link"] and "labels" in m
     assert c.get("/messages/nope").status_code == 404
+
+
+# ---------- hologram inside hologram ----------
+from app import hier  # noqa: E402
+
+
+def test_drill_into_topic_splits_again_and_lists_leaves(db):
+    from app.embeddings import set_embedder
+    set_embedder(FakeEmbedder())
+    build(db)
+    recluster(db, FakeEmbedder())
+    hier._cache.clear()
+    tid = max(db.scalars(select(Topic)).all(), key=lambda t: t.size).topic_id
+    v = hier.view(db, f"t{tid}")
+    assert v["path"] == f"t{tid}"
+    assert v["leaf"] or (len(v["topics"]) >= 2 and v["points"])
+    if not v["leaf"]:
+        assert all(p["t"] is None or p["t"] in {t["topic_id"] for t in v["topics"]} for p in v["points"])
+        first = v["topics"][0]["topic_id"]
+        rows = list(db.execute(hier.messages_query(db, f"t{tid}", first)))
+        assert len(rows) == v["topics"][0]["count"]
+        child = hier.view(db, f"t{tid}.{first}")   # one level deeper never crashes, small groups become a list
+        assert child["leaf"] or child["topics"]
+    else:
+        assert v["reason"]
+
+
+def test_kinds_group_across_senders_and_trashed_mail_drops_out(db):
+    from app.embeddings import set_embedder
+    set_embedder(FakeEmbedder())
+    build(db)
+    hier._cache.clear(); hier._subject_vecs.clear()
+    v = hier.view(db, "k")
+    assert not v["leaf"] and len(v["topics"]) >= 2
+    assert v["count"] == len(v["points"])
+    victim = v["points"][0]["i"]
+    m = db.get(Message, victim)
+    m.in_trash = True
+    db.commit()
+    again = hier.view(db, "k")
+    assert victim not in {p["i"] for p in again["points"]}
+
+
+def test_tiny_or_unknown_nodes(db):
+    import pytest
+    build(db)
+    with pytest.raises(KeyError):
+        hier.view(db, "zzz")
+    with pytest.raises(KeyError):
+        hier.view(db, "k.999")

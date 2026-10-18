@@ -235,14 +235,37 @@ function TopicMap({ version, act }) {
   const [view, setView] = useState("holo");    // holo | flat | list
   const [sel, setSel] = useState(new Set());
   const [open, setOpen] = useState(null);
-  const [list] = usePoll(() => (view === "list" && focus != null ? api.topicMessages(focus) : Promise.resolve(null)), 0, [view, focus, version]);
+  // "hologram inside hologram": trail = the groups you went into; mode "kinds" = all mail grouped by what the subject says
+  const [mode, setMode] = useState("topics");
+  const [trail, setTrail] = useState([]);       // [{ path, label }]
+  const curPath = trail.length ? trail[trail.length - 1].path : mode === "kinds" ? "k" : null;
+  const nested = curPath != null;
+  const [hier, , hierErr] = usePoll(() => (curPath ? api.hier(curPath) : Promise.resolve(null)), 0, [curPath, version]);
+  const hierReady = nested && hier && hier.path === curPath;
+  const leaf = hierReady && hier.leaf;
+  const [list] = usePoll(() => {
+    if (leaf) return api.hierMessages(curPath);
+    if (view !== "list" || focus == null) return Promise.resolve(null);
+    return nested ? api.hierMessages(curPath, focus) : api.topicMessages(focus);
+  }, 0, [view, focus, version, curPath, leaf]);
   useEffect(() => { setSel(new Set()); setOpen(null); }, [version]);
+  const goTo = (nextMode, nextTrail) => { setMode(nextMode); setTrail(nextTrail); setFocus(null); setSel(new Set()); setOpen(null); };
   const wasRunning = useRef(false);
-  useEffect(() => { if (wasRunning.current && status && !status.running) { reloadInfo(); reloadMap(); } wasRunning.current = !!status?.running; }, [status, reloadInfo, reloadMap]);
+  useEffect(() => {
+    if (wasRunning.current && status && !status.running) { reloadInfo(); reloadMap(); setTrail([]); setFocus(null); }
+    wasRunning.current = !!status?.running;
+  }, [status, reloadInfo, reloadMap]);
 
-  const topics = info?.topics ?? [];
-  const points = map?.points ?? [];
-  const noTopics = info && !topics.length;
+  const topics = nested ? (hierReady && !leaf ? hier.topics : []) : (info?.topics ?? []);
+  const points = nested ? (hierReady && !leaf ? hier.points : []) : (map?.points ?? []);
+  const noise = nested ? (hier?.noise ?? 0) : (info?.noise ?? 0);
+  const noTopics = !nested && info && !topics.length;
+  const childPath = (id) => (curPath ? `${curPath}.${id}` : `t${id}`);
+  const goInside = (id) => {
+    const t = topics.find((x) => x.topic_id === id);
+    if (!t || id === 0) return;
+    goTo(mode, [...trail, { path: childPath(id), label: t.label }]);
+  };
   const color = (t, i) => (t == null ? GREY : topicColor(i, topics.length));
 
   async function openMail(id) { setOpen(await api.message(id)); }
@@ -259,15 +282,39 @@ function TopicMap({ version, act }) {
           {status?.error && <span className="err"> Last run failed: {status.error}</span>}
         </p>
       )}
-      {!noTopics && info && (
+      {!noTopics && (nested || info) && (
         <>
+          <nav className="tabs" aria-label="Group by">
+            <button className={mode === "topics" ? "on" : ""} title="Topics from sender name + subject + snippet (the original map)" onClick={() => goTo("topics", [])}>Topics</button>
+            <button className={mode === "kinds" ? "on" : ""} title="All mail grouped by what the subject says, across senders" onClick={() => goTo("kinds", [])}>Kinds (by subject)</button>
+          </nav>
+          {nested && (
+            <nav className="crumbs" aria-label="Where you are">
+              <button onClick={() => goTo(mode, [])}>{mode === "kinds" ? "All kinds" : "All topics"}</button>
+              {trail.map((c, i) => (
+                <React.Fragment key={c.path}>
+                  <span className="muted"> › </span>
+                  <button className={i === trail.length - 1 ? "on" : ""} onClick={() => goTo(mode, trail.slice(0, i + 1))}>{c.label}</button>
+                </React.Fragment>
+              ))}
+              {trail.length > 0 && <button onClick={() => goTo(mode, trail.slice(0, -1))}>← Back</button>}
+            </nav>
+          )}
           <nav className="tabs">
             <button className={view === "holo" ? "on" : ""} onClick={() => setView("holo")}>Hologram 3D</button>
             <button className={view === "flat" ? "on" : ""} onClick={() => setView("flat")}>Flat map</button>
             <button className={view === "list" ? "on" : ""} onClick={() => { setView("list"); if (focus == null) setFocus(topics[0]?.topic_id ?? 0); }}>List</button>
             <button disabled={status?.running} onClick={async () => { await api.recluster(); reloadStatus(); }}>{status?.running ? "Rebuilding…" : "Rebuild topics"}</button>
           </nav>
-          <div className="topic-legend" role="group" aria-label="Topics">
+          {nested && hierErr && <p className="err">{hierErr.message}</p>}
+          {nested && !hierReady && !hierErr && <p className="muted">Grouping these mails by meaning… the first time this can take up to a minute.</p>}
+          {leaf && (
+            <>
+              <p className="muted">{hier.reason} Showing the {hier.count} mails.</p>
+              {list ? list.map((m) => <MailRow key={m.message_id} m={m} onAct={act} />) : <p className="muted">Loading…</p>}
+            </>
+          )}
+          {(!nested || (hierReady && !leaf)) && <div className="topic-legend" role="group" aria-label="Topics">
             <button className={focus == null ? "on" : ""} onClick={() => setFocus(null)}>All ({points.length})</button>
             {topics.map((t, i) => (
               <button key={t.topic_id} className={focus === t.topic_id ? "on" : ""} title={t.summary} onClick={() => setFocus(focus === t.topic_id ? null : t.topic_id)}>
@@ -275,17 +322,17 @@ function TopicMap({ version, act }) {
               </button>
             ))}
             <button className={focus === 0 ? "on" : ""} title="Mail that fits no topic, most important first" onClick={() => setFocus(focus === 0 ? null : 0)}>
-              <i style={{ background: GREY }} />Review bucket ({info.noise})
+              <i style={{ background: GREY }} />Review bucket ({noise})
             </button>
-          </div>
+          </div>}
         </>
       )}
 
-      {!noTopics && (view === "holo" || view === "flat") && map && (
+      {!noTopics && (view === "holo" || view === "flat") && (nested ? hierReady && !leaf : map) && (
         <>
         <Explain id="map">
           {view === "holo"
-            ? <Hologram points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} />
+            ? <Hologram points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} onDrill={goInside} far={nested} />
             : <ClusterMap points={points} topics={topics} focus={focus} selected={sel} onSelect={setSel} onOpen={openMail} />}
         </Explain>
           {focus != null && (
@@ -293,6 +340,7 @@ function TopicMap({ version, act }) {
               <button onClick={() => setSel(new Set(points.filter((p) => (focus === 0 ? p.t == null : p.t === focus)).map((p) => p.i)))}>
                 Select all in this {focus === 0 ? "bucket" : "topic"}
               </button>
+              {focus !== 0 && <button className="primary" onClick={() => goInside(focus)}>Go inside this {mode === "kinds" ? "kind" : "topic"}</button>}
             </div>
           )}
           {ids.length > 0 && (
@@ -307,7 +355,7 @@ function TopicMap({ version, act }) {
         </>
       )}
 
-      {!noTopics && view === "list" && (list ? list.map((m) => <MailRow key={m.message_id} m={m} onAct={act} />) : <p className="muted">Loading…</p>)}
+      {!noTopics && !leaf && view === "list" && (list ? list.map((m) => <MailRow key={m.message_id} m={m} onAct={act} />) : <p className="muted">Loading…</p>)}
 
       {open && (
         <div className="sidepanel" role="region" aria-label="Mail">

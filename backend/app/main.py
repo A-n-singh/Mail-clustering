@@ -19,6 +19,7 @@ from .models import Action, Cluster, Message, MessageCluster, MessageTopic, Owne
 from .security import decrypt, encrypt
 from .capacity import refill
 from . import control
+from . import hier
 from . import topics as topics_mod
 from .purge import PurgeError, purge_trash, trash_summary
 from .sync import close_orphan_runs, run_sync, sync_in_progress
@@ -395,6 +396,24 @@ def topic_messages(topic_id: int, db: Session = Depends(get_db), _: str = Depend
          .outerjoin(Score, Score.message_id == Message.message_id)
          .where(cond, Message.in_trash == False)  # noqa: E712
          .order_by(Score.importance_score.desc(), Message.date.desc()).limit(500))
+    return [_row(m, s) for m, s in db.execute(q)]
+
+
+@app.get("/hier/{path}")
+def hier_view(path: str, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    """One level of 'hologram inside hologram'. path: t<topic id> | k, then .<child id> per level. Can take a while the first time."""
+    try:
+        return hier.view(db, path)
+    except KeyError:
+        raise HTTPException(404, "unknown group")
+
+
+@app.get("/hier/{path}/messages")
+def hier_messages(path: str, sub: int | None = None, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+    try:
+        q = hier.messages_query(db, path, sub)
+    except KeyError:
+        raise HTTPException(404, "unknown group")
     return [_row(m, s) for m, s in db.execute(q)]
 
 

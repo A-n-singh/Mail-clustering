@@ -40,6 +40,8 @@ export const api = {
   topicsStatus: () => call("/topics/status"),
   recluster: () => call("/topics/recluster", { method: "POST" }),
   topicMessages: (id) => call(`/topics/${id}/messages`),
+  hier: (path) => call(`/hier/${path}`),
+  hierMessages: (path, sub) => call(`/hier/${path}/messages${sub == null ? "" : `?sub=${sub}`}`),
   message: (id) => call(`/messages/${id}`),
   purge: (confirm) => call("/trash/purge", { method: "POST", body: { confirm } }),
   digest: () => call("/digest"),
