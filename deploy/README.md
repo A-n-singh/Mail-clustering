@@ -14,7 +14,7 @@ On duckdns.org create a name (e.g. `myinbox`) and set its IP to the VM's static 
 ## 3. On the VM (browser SSH button is fine)
 ```bash
 curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker $USER   # then log out and back in
-git clone <your-repo-url> smart-inbox && cd smart-inbox && git checkout claude/new-session-apraa9
+git clone <your-repo-url> smart-inbox && cd smart-inbox        # the default branch, main, is the one to deploy
 cd deploy
 # Tablet/no paste? In Google Cloud download the OAuth client as JSON, press UPLOAD FILE in the SSH window,
 # and configure.sh reads the Client ID and secret from it. Otherwise it asks for them.
@@ -54,3 +54,13 @@ waits and retries when Gmail says "slow down", and a first sync that stops resum
 ## Stopping a sync
 Press **Stop** (next to "Syncing…") at any time. Mails already read are kept and grouped; the next **Sync now** continues
 where it stopped. Stopping also skips the long topic build that normally follows a sync.
+
+## Optional heading model (not in the Docker image)
+Topic headings work without any model: mixed topics are named by their most typical real subject. The optional local heading model (Qwen2.5-1.5B-Instruct, about
+1.1 GB, plus `llama-cpp-python`) is **not installed in the backend image**, so on this deployment `TITLE_MODEL_PATH` stays empty. To use it you would add
+`requirements-naming.txt` to the image, put the `.gguf` file on the `data` volume and set `TITLE_MODEL_PATH`; it needs roughly 2 GB of free memory (an estimate, not measured on the server) while topics are being
+named. `docker compose exec backend python -m app.doctor` shows the status of the heading model and of the stored vectors.
+
+## Changing the embedding model
+Set `EMBED_MODEL` in `.env` and restart. The next sync recomputes every vector and rebuilds the topics (a few minutes). The new model is downloaded on first use (the server needs internet
+then); the Dockerfile bakes in `BAAI/bge-small-en-v1.5` only.

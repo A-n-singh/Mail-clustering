@@ -1,6 +1,15 @@
 # Mail-clustering
 This repository is built to ease out the biggest problem of of every corporate individual that is male. There are too many mails unwanted mails. Sometimes people think that they should be clustered. So this repository is the exact problem.
 
+**Working on this repo (people or AI assistants):** read [`CLAUDE.md`](CLAUDE.md) first. It is the verified map of the code, the decisions already made
+and what is not built yet. Deploying on a server: [`deploy/README.md`](deploy/README.md).
+
+## What you get
+Eight tabs: **Needs action** (urgent / needs-reply mail first), **Groups** (3D hologram, one ball per sender; going inside shows one ball per kind of subject, with
+the mail list and bulk actions), **Topic map** (mail grouped by meaning across senders: Hologram 3D or List, Kinds mode, Rebuild topics, go inside a topic to split it
+again), **Daily digest**, **Storage**, **Trash** (optional permanent delete), **Action log** (Undo per batch), **Account** (erase my data). Click a subject anywhere to read
+the cleaned text; Sync now / Stop in the header. Urgent and needs-reply mail is protected from bulk actions.
+
 ## Phase 1 backend (`backend/`)
 FastAPI + SQLAlchemy. Google sign-in (owner-only), Gmail sync, sender grouping, rule-based scoring,
 actions with Undo. Each cluster keeps at most `CLUSTER_CAP` (360) live mails; trashing refills it with older mail from the same sender. Run: `cd backend && pip install -r requirements.txt && cp .env.example .env && uvicorn app.main:app --reload`.
@@ -27,9 +36,9 @@ Trash, after you type `DELETE FOREVER`. Mail restored since the last sync is ski
 
 ## Phase 2: topic clusters and the map
 Mail is also grouped **by topic across senders**. Each mail is turned into a vector by a small sentence model that runs
-**on this machine** (`fastembed`, ~130 MB downloaded on first use; nothing is sent anywhere, no LLM). Vectors are reduced with
-UMAP, clustered with HDBSCAN, and a mail that sits far from its own cluster goes to the **review bucket**. Topic names are
-the most distinctive words in the cluster (no LLM). 2D coordinates are stored, so the **Topic map** tab only reads them.
+**on this machine** (`fastembed`, about 0.1 GB downloaded on first use; nothing is sent anywhere). Vectors are reduced with
+UMAP, clustered with HDBSCAN, and a mail that sits far from its own cluster goes to the **review bucket**. Topics are named by the pipeline in *Topic headings* below.
+3D coordinates are stored, so the map tabs only read them.
 New mail is placed into the nearest topic after every sync; topics are rebuilt weekly (`RECLUSTER_DAYS`) or with **Rebuild topics**.
 Topic IDs stay stable across rebuilds. Lasso-select dots to trash/archive/star in bulk (same confirm + Undo + protection rules).
 
@@ -39,10 +48,37 @@ which model made it. At the next sync, if any mail carries a vector from a diffe
 right away** (not at the weekly rebuild), so vectors of two models are never mixed. It takes a few minutes for a few thousand mails, can be stopped and
 resumed (only what is still stale is redone), and settles after one rebuild. `python -m app.doctor` shows whether your stored vectors match.
 
+#### Comparison of nine embedding models
+Benchmark on 2,040 labelled emails (dataset `weijianzhg/email-triage-action-seed`; text = subject + first 200 characters of the body, no sender),
+run through the same UMAP + HDBSCAN pipeline the app uses. Sorted by size.
+
+| Model | Dim | Size | License | kNN@10 | Purity | Clustered | CPU time | MTEB clustering |
+|---|---|---|---|---|---|---|---|---|
+| **bge-small-en-v1.5 (current)** | 384 | 0.07 GB | MIT | 0.855 | 0.885 | 0.786 | 37 s | 43.8 |
+| all-MiniLM-L6-v2 | 384 | 0.09 GB | Apache-2.0 | 0.853 | 0.893 | 0.804 | 21 s | n/a |
+| snowflake arctic-embed-xs | 384 | 0.09 GB | Apache-2.0 | 0.851 | 0.895 | 0.783 | 22 s | 42.2 |
+| snowflake arctic-embed-s | 384 | 0.13 GB | Apache-2.0 | 0.852 | 0.905 | 0.774 | 35 s | 40.7 |
+| bge-base-en-v1.5 | 768 | 0.21 GB | MIT | 0.856 | 0.902 | 0.779 | 112 s | 45.8 |
+| snowflake arctic-embed-m | 768 | 0.43 GB | Apache-2.0 | 0.868 | 0.927 | 0.778 | 104 s | 41.5 |
+| gte-base (thenlper) | 768 | 0.44 GB | MIT | 0.876 | 0.912 | 0.820 | 100 s | 46.2 |
+| nomic-embed-text-v1.5 | 768 | 0.52 GB | Apache-2.0 | 0.883 | 0.904 | 0.786 | 153 s | 43.9 |
+| mxbai-embed-large-v1 | 1024 | 0.64 GB | Apache-2.0 | 0.874 | 0.906 | 0.791 | 343 s | 46.7 |
+
+- **kNN@10**: share of a mail's 10 nearest neighbours that have the same category (higher is better).
+- **Purity**: how single-category the clusters are. **Clustered**: share of mail that landed in a topic instead of the review bucket.
+- **CPU time**: time to embed all 2,040 mails, including model load (some runs include the first download). MTEB figures are the published clustering averages from the model cards.
+
+**Result.** The other models were only about 1 to 4 points better at 3 to 9 times the size or time, so `bge-small-en-v1.5` was kept. The first upgrade
+to try if real topics look mixed is **gte-base** (+2.1 kNN, +2.7 purity, +3.4 clustered, about 2.7x the time and 6x the size). arctic-embed-m gives the purest
+clusters; mxbai-embed-large is about 9x slower and no better than gte-base.
+
+**Caveats.** Single run per model. The emails are synthetic, English-only, in 6 broad categories, so gaps of 1 to 2 points may be noise (the pipeline makes
+about 100 fine clusters, so completeness/ARI against 6 labels are not meaningful and are left out). Hindi/Hinglish mail was not tested.
+
 ### Look and feel
 The dashboard uses a dark "HUD" theme. **Topic map → Hologram 3D** shows every mail as a glowing node in 3D, each topic wrapped in a
-rotating wireframe shell with a floating label. Drag to orbit, wheel to zoom, hover to scan a mail, click to open it, and use
-**Lasso** to select nodes for bulk actions. A plain list is one click away. The **Groups** tab is a hologram too: one ball per sender, and going inside a sender shows one ball per kind of subject.
+rotating wireframe shell with a floating label. Drag to orbit, pinch or wheel to zoom, hover to scan a mail, **tap a ball to fly the camera to it, tap it again to go
+inside, tap empty space to fly back**, tap a dot to open that mail, and use **Lasso** to select nodes for bulk actions. A plain list is one click away. The **Groups** tab is a hologram too: one ball per sender, and going inside a sender shows one ball per kind of subject.
 
 ### Topic headings
 A topic is named by a small fixed pipeline, `backend/app/naming.py`:
@@ -59,6 +95,6 @@ A topic is named by a small fixed pipeline, `backend/app/naming.py`:
    subject. The old keyword label is the last resort.
 
 The model is optional and never trains or learns. It is loaded only while topics are being named, then freed. Without it, mixed topics are named
-by their most typical subject, and steps 1 to 3 still work. To switch it on: `pip install -r requirements-naming.txt`,
+by their most typical subject, and steps 1 to 3 still work. To switch it on (inside `backend/`): `pip install -r requirements-naming.txt`,
 `python fetch_title_model.py` (about 1.1 GB, one download), then set `TITLE_MODEL_PATH` in `.env` to the path it prints. Everything then runs on
 your machine. `python -m app.doctor` shows its status. Any small chat GGUF file works in its place.

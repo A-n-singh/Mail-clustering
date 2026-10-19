@@ -92,7 +92,7 @@ def _recluster(db: Session, embedder: Embedder | None = None) -> TopicRun:
         from sklearn.cluster import HDBSCAN
         nn = max(2, min(15, len(ids) - 1))
         Z = _reduce(X, min(10, len(ids) - 2), nn)
-        xyz = _reduce(X, 3, nn)  # stored once; the flat map uses x,y and the hologram uses x,y,z
+        xyz = _reduce(X, 3, nn)  # stored once; the hologram uses x,y,z (the old flat 2D map view was removed)
         labels = HDBSCAN(min_cluster_size=settings.topic_min_cluster_size).fit_predict(Z)
         labels = demote_outliers(X, labels, settings.topic_min_cluster_size)
         _store(db, run, ids, xyz, labels, embedder)
