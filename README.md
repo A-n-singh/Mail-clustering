@@ -48,6 +48,33 @@ which model made it. At the next sync, if any mail carries a vector from a diffe
 right away** (not at the weekly rebuild), so vectors of two models are never mixed. It takes a few minutes for a few thousand mails, can be stopped and
 resumed (only what is still stale is redone), and settles after one rebuild. `python -m app.doctor` shows whether your stored vectors match.
 
+#### Comparison of nine embedding models
+Benchmark on 2,040 labelled emails (dataset `weijianzhg/email-triage-action-seed`; text = subject + first 200 characters of the body, no sender),
+run through the same UMAP + HDBSCAN pipeline the app uses. Sorted by size.
+
+| Model | Dim | Size | License | kNN@10 | Purity | Clustered | CPU time | MTEB clustering |
+|---|---|---|---|---|---|---|---|---|
+| **bge-small-en-v1.5 (current)** | 384 | 0.07 GB | MIT | 0.855 | 0.885 | 0.786 | 37 s | 43.8 |
+| all-MiniLM-L6-v2 | 384 | 0.09 GB | Apache-2.0 | 0.853 | 0.893 | 0.804 | 21 s | n/a |
+| snowflake arctic-embed-xs | 384 | 0.09 GB | Apache-2.0 | 0.851 | 0.895 | 0.783 | 22 s | 42.2 |
+| snowflake arctic-embed-s | 384 | 0.13 GB | Apache-2.0 | 0.852 | 0.905 | 0.774 | 35 s | 40.7 |
+| bge-base-en-v1.5 | 768 | 0.21 GB | MIT | 0.856 | 0.902 | 0.779 | 112 s | 45.8 |
+| snowflake arctic-embed-m | 768 | 0.43 GB | Apache-2.0 | 0.868 | 0.927 | 0.778 | 104 s | 41.5 |
+| gte-base (thenlper) | 768 | 0.44 GB | MIT | 0.876 | 0.912 | 0.820 | 100 s | 46.2 |
+| nomic-embed-text-v1.5 | 768 | 0.52 GB | Apache-2.0 | 0.883 | 0.904 | 0.786 | 153 s | 43.9 |
+| mxbai-embed-large-v1 | 1024 | 0.64 GB | Apache-2.0 | 0.874 | 0.906 | 0.791 | 343 s | 46.7 |
+
+- **kNN@10**: share of a mail's 10 nearest neighbours that have the same category (higher is better).
+- **Purity**: how single-category the clusters are. **Clustered**: share of mail that landed in a topic instead of the review bucket.
+- **CPU time**: time to embed all 2,040 mails, including model load (some runs include the first download). MTEB figures are the published clustering averages from the model cards.
+
+**Result.** The other models were only about 1 to 4 points better at 3 to 9 times the size or time, so `bge-small-en-v1.5` was kept. The first upgrade
+to try if real topics look mixed is **gte-base** (+2.1 kNN, +2.7 purity, +3.4 clustered, about 2.7x the time and 6x the size). arctic-embed-m gives the purest
+clusters; mxbai-embed-large is about 9x slower and no better than gte-base.
+
+**Caveats.** Single run per model. The emails are synthetic, English-only, in 6 broad categories, so gaps of 1 to 2 points may be noise (the pipeline makes
+about 100 fine clusters, so completeness/ARI against 6 labels are not meaningful and are left out). Hindi/Hinglish mail was not tested.
+
 ### Look and feel
 The dashboard uses a dark "HUD" theme. **Topic map → Hologram 3D** shows every mail as a glowing node in 3D, each topic wrapped in a
 rotating wireframe shell with a floating label. Drag to orbit, pinch or wheel to zoom, hover to scan a mail, **tap a ball to fly the camera to it, tap it again to go
