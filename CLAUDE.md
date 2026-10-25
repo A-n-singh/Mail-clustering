@@ -11,7 +11,7 @@ Owner talks Hinglish and prefers short plain answers; they decide scope, so prop
 cd backend && pip install -r requirements.txt && cp .env.example .env && uvicorn app.main:app --reload     # API on :8000
 cd frontend && npm install && npm run dev                                                                   # UI on :5173, proxies /api -> :8000
 cd backend && python demo.py        # same app with a fake in-memory Gmail + 250 made-up mails, no Google needed (then npm run dev, click Sign in)
-cd backend && pytest -q             # 98 tests, ~35 s, all offline (FakeGmail + FakeEmbedder in tests/conftest.py and tests/test_topics.py)
+cd backend && pytest -q             # 107 tests, ~35 s, all offline (FakeGmail + FakeEmbedder in tests/conftest.py and tests/test_topics.py)
 cd frontend && npm test             # vitest, 2 tests;  npx vite build  to check the bundle
 python -m app.doctor [--model] [--live]     # plain-language setup check (run inside backend/)
 scripts/e2e_*.py                    # Playwright browser checks against demo.py + npm run dev (need `pip install playwright` and /opt/pw-browsers chromium)
@@ -43,9 +43,9 @@ Routes (all but `/health` and `/auth/*` need the owner cookie): `/auth/login|cal
 `/actions`, `/actions/preview`, `/actions/{batch}/undo`, `/actions/log`; `/topics`, `/map`, `/topics/status`, `POST /topics/recluster`, `/topics/{id}/messages`;
 `/hier/{path}`, `/hier/{path}/messages`; `/trash`, `POST /trash/purge`, `/health`.
 
-Settings (`.env`): DATABASE_URL, TOKEN_KEY, SESSION_SECRET, GOOGLE_CLIENT_ID/SECRET, OAUTH_REDIRECT_URI, FRONTEND_URL, OWNER_EMAIL, INITIAL_FETCH=3000,
+Settings (`.env`): DATABASE_URL, TOKEN_KEY, SESSION_SECRET, GOOGLE_CLIENT_ID/SECRET, OAUTH_REDIRECT_URI, FRONTEND_URL, OWNER_EMAIL, INITIAL_FETCH=1000,
 SYNC_INTERVAL_MINUTES=20, ALLOW_PERMANENT_DELETE=false, TOPICS_ENABLED, EMBED_MODEL, TOPIC_MIN_CLUSTER_SIZE=8, TOPIC_MIN_MESSAGES=30, RECLUSTER_DAYS=7,
-GMAIL_RATE_PER_SEC=8, CLUSTER_CAP=360, TITLE_MODEL_PATH (optional .gguf), TITLE_MIN_SIMILARITY=0.75, TITLE_MERGE_SIMILARITY=0.93.
+GMAIL_RATE_PER_SEC=8, CLUSTER_CAP=360, USER_CAP=1000, BATCH_SIZE=25, TOPIC_MILESTONES="30,200,1000", TITLE_MODEL_PATH (optional .gguf), TITLE_MIN_SIMILARITY=0.75, TITLE_MERGE_SIMILARITY=0.93.
 
 ## Frontend map (`frontend/src/`)
 `main.jsx` -> `App.jsx` (Login, Dashboard with header + 8 tabs: Needs action, Groups, Topic map, Daily digest, Storage, Trash, Action log, Account; also `Groups`, `Drill`,
@@ -56,7 +56,7 @@ works" text per tab; update it when behaviour changes), `ClusterMap.jsx` (only i
 `Bubbles.jsx` is **dead code** (the flat bubble view was replaced by the Groups hologram). The flat 2D map view was removed on purpose; Topic map = Hologram 3D + List.
 
 ## Key pipelines
-- **Sync**: Gmail history IDs; first run fetches newest `INITIAL_FETCH`; regroup while syncing; `enforce_cap`; Stop/failed keeps what was read and resumes. After a sync, `topics.after_sync`.
+- **Sync**: Gmail history IDs; first run fetches newest `INITIAL_FETCH`; regroup while syncing; every `BATCH_SIZE` (25) mails `topics.progress` embeds them and places them in the nearest topic, and topics are rebuilt from scratch only when the mailbox first reaches a milestone (30/200/1000 live mails); `enforce_cap` then `enforce_user_cap` (whole mailbox keeps at most `USER_CAP`=1000 live mails, protected mail never evicted); after a sync or a trash action `refill_user_in_batches` pulls mail OLDER than the oldest kept (25 at a time) back up to the cap; Stop/failed keeps what was read and resumes. After a sync, `topics.after_sync`.
 - **Topics**: `after_sync` -> if any live mail has a vector from another model (`stale_embeddings`) OR a rebuild is due (>7 days / never) -> full `recluster`; else `assign_new`.
   **Changing `EMBED_MODEL` recomputes every vector and rebuilds topics at the next sync** (idempotent, resumable, trashed mail not counted). `load_matrix(..., model=)` never mixes models.
 - **Headings (`naming.py`)**: facts (subject types, order numbers collapsed) -> merge near-copies by embedding (cos >= 0.93) -> router (one type >= 70%: that subject is the heading, no model)

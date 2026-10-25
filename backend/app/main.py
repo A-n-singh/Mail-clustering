@@ -17,7 +17,7 @@ from .db import Base, SessionLocal, engine, get_db
 from .gmail import GmailClient, GoogleGmailClient, gmail_web_url
 from .models import Action, Cluster, Message, MessageCluster, MessageTopic, Owner, Score, SyncRun, Topic, TopicRun
 from .security import decrypt, encrypt
-from .capacity import refill
+from .capacity import refill, refill_user_in_batches
 from . import control
 from . import hier
 from . import holo_layout
@@ -59,6 +59,31 @@ def get_gmail(db: Session = Depends(get_db)) -> GmailClient:
     return gmail
 
 
+def _on_batch(db: Session, _done: int):
+    """After every small batch of mail: embed it and place it in a topic, so the screen grows batch by batch."""
+    try:
+        topics_mod.progress(db)
+    except Exception:
+        db.rollback()
+
+
+def _refill_job():
+    """After mail left (trash, or deleted in Gmail): pull older mail back in, a few at a time, until the cap is full again."""
+    if control.sync_active.is_set() or control.refill_active.is_set():
+        return
+    control.refill_active.set()
+    try:
+        with SessionLocal() as db:
+            gmail = build_gmail(db)
+            if gmail:
+                refill_user_in_batches(db, gmail, settings.user_cap, settings.batch_size, _on_batch,
+                                       cancelled=lambda: control.sync_active.is_set())
+    except Exception:
+        pass  # nothing is lost: the next sync or trash action tries again
+    finally:
+        control.refill_active.clear()
+
+
 def _sync_job(already_marked: bool = False):
     if not already_marked:
         if control.sync_active.is_set():
@@ -70,11 +95,17 @@ def _sync_job(already_marked: bool = False):
             if not gmail:
                 return
             try:
-                run = run_sync(db, gmail, settings.initial_fetch, settings.cluster_cap)
+                run = run_sync(db, gmail, settings.initial_fetch, settings.cluster_cap,
+                               settings.user_cap, settings.batch_size, _on_batch)
             except Exception:
                 return  # recorded in sync_runs.error; next run resumes
             if run.error == control.STOPPED:
                 return  # the owner stopped it: do not start the (long) topic build afterwards
+            try:  # mail may have left Gmail meanwhile: top the mailbox back up, in batches
+                refill_user_in_batches(db, gmail, settings.user_cap, settings.batch_size, _on_batch,
+                                       cancelled=lambda: control.cancel_sync.is_set())
+            except Exception:
+                db.rollback()
             try:
                 topics_mod.after_sync(db)  # weekly re-cluster, otherwise assign new mail to existing topics
             except Exception:
@@ -186,7 +217,7 @@ def sync_status(db: Session = Depends(get_db), _: str = Depends(auth.current_use
     stopped = bool(run and run.error == control.STOPPED)
     return {"running": sync_in_progress(db), "fetched": run.fetched if run else 0,
             "total": run.total if run else 0, "error": None if stopped else (run.error if run else None),
-            "stopped": stopped,
+            "stopped": stopped, "refilling": control.refill_active.is_set(),
             "connected": db.scalar(select(Owner.id)) is not None,
             "last_sync": run.ended.isoformat() if run and run.ended else None}
 
@@ -356,8 +387,8 @@ def preview(body: ActionIn, db: Session = Depends(get_db), _: str = Depends(auth
 
 
 @app.post("/actions")
-def do_action(body: ActionIn, db: Session = Depends(get_db), gmail: GmailClient = Depends(get_gmail),
-              _: str = Depends(auth.current_user)):
+def do_action(body: ActionIn, background: BackgroundTasks, db: Session = Depends(get_db),
+              gmail: GmailClient = Depends(get_gmail), _: str = Depends(auth.current_user)):
     try:
         batch = act.perform(db, gmail, body.message_ids, body.action, body.param, body.confirmed)
     except act.ActionError as e:
@@ -366,6 +397,7 @@ def do_action(body: ActionIn, db: Session = Depends(get_db), gmail: GmailClient 
     if body.action == "trash":  # fill the cluster back up with older mail
         cids = set(db.scalars(select(MessageCluster.cluster_id).where(MessageCluster.message_id.in_(body.message_ids))))
         refilled = sum(refill(db, gmail, cid, settings.cluster_cap) for cid in cids)
+        background.add_task(_refill_job)  # and the whole mailbox back up to the cap, a few mails at a time
     return {"batch_id": batch, "refilled": refilled}
 
 

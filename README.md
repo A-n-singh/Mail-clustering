@@ -12,7 +12,7 @@ the cleaned text; Sync now / Stop in the header. Urgent and needs-reply mail is 
 
 ## Phase 1 backend (`backend/`)
 FastAPI + SQLAlchemy. Google sign-in (owner-only), Gmail sync, sender grouping, rule-based scoring,
-actions with Undo. Each cluster keeps at most `CLUSTER_CAP` (360) live mails; trashing refills it with older mail from the same sender. Run: `cd backend && pip install -r requirements.txt && cp .env.example .env && uvicorn app.main:app --reload`.
+actions with Undo. Each cluster keeps at most `CLUSTER_CAP` (360) live mails and the whole mailbox at most `USER_CAP` (1,000); trashing refills both with older mail, a few at a time. Mail is read, embedded and placed into topics in small batches (`BATCH_SIZE`, 25), so groups and topics appear and grow on screen while a first load is still running. Run: `cd backend && pip install -r requirements.txt && cp .env.example .env && uvicorn app.main:app --reload`.
 Tests: `pytest`.
 
 ## Run it

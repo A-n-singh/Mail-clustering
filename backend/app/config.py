@@ -15,7 +15,10 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     # Only this Google account may sign in (single-owner app).
     owner_email: str = ""
-    initial_fetch: int = 3000  # newest mails pulled on first sync
+    initial_fetch: int = 1000  # newest mails pulled on first sync
+    user_cap: int = 1000  # max live mails kept locally in total; older mail is pulled in again as mail leaves
+    batch_size: int = 25  # mails read, embedded and placed into topics per batch while loading
+    topic_milestones: str = "30,200,1000"  # live-mail counts at which topics are rebuilt from scratch while loading
     sync_interval_minutes: int = 20  # scheduled sync (15-30 min)
     # Permanent delete of mail ALREADY IN TRASH. Off by default: turning it on makes sign-in ask Google for the
     # full-mailbox scope (https://mail.google.com/), which is the only scope that allows permanent deletion.

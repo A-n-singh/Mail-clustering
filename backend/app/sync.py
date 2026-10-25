@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from .cleaning import clean_body
 from .gmail import GmailClient, RawMail, parse_sender
 from . import control
-from .capacity import enforce_cap
+from .capacity import enforce_cap, enforce_user_cap
 from .cleanup import delete_messages
 from .sync_store import store_raw
 from .grouping import regroup
@@ -38,7 +38,15 @@ def close_orphan_runs(db: Session) -> int:
     return n
 
 
-def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: int = 360) -> SyncRun:
+def _cap(db: Session, cap: int, user_cap: int | None):
+    enforce_cap(db, cap)
+    if user_cap:
+        enforce_user_cap(db, user_cap)
+
+
+def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: int = 360,
+             user_cap: int | None = None, batch_size: int = 25, on_batch=None) -> SyncRun:
+    """on_batch(db, mails_read_so_far) runs after every `batch_size` mails, so topics can grow while a long load is still going."""
     control.cancel_sync.clear()  # a Stop pressed for an earlier run must not cancel this one
     run = SyncRun()
     db.add(run)
@@ -68,17 +76,23 @@ def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: in
                 if n == 100 or n % 500 == 0:
                     regroup(db)  # group as we go, so Groups/Grouped fill in during a long first sync
                 db.commit()  # lets /sync/status show progress
+            if on_batch and n % batch_size == 0:
+                db.commit()
+                try:
+                    on_batch(db, n)
+                except Exception:  # topic trouble (e.g. model not downloaded yet) must never stop the mail from loading
+                    db.rollback()
         if deleted:
             _remove(db, deleted)
         run.fetched = len(ids)
         regroup(db)
-        enforce_cap(db, cap)
+        _cap(db, cap, user_cap)
         state.history_id, state.last_sync = new_history, datetime.now(timezone.utc)
         db.merge(state)
     except control.SyncCancelled:  # the owner pressed Stop: keep everything read so far, leave history_id so Sync resumes
         db.commit()
         regroup(db)
-        enforce_cap(db, cap)
+        _cap(db, cap, user_cap)
         run = db.merge(run)
         run.fetched, run.error, run.ended = done, control.STOPPED, datetime.now(timezone.utc)
         db.commit()
@@ -90,7 +104,7 @@ def run_sync(db: Session, gmail: GmailClient, initial_fetch: int = 3000, cap: in
             db.rollback()
         try:  # show what we did manage to read, instead of an empty dashboard
             regroup(db)
-            enforce_cap(db, cap)
+            _cap(db, cap, user_cap)
             db.commit()
         except Exception:
             db.rollback()

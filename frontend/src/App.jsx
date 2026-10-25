@@ -52,10 +52,10 @@ function Dashboard({ email }) {
     reloadStatus();
   }
   useEffect(() => {
-    if (!status?.running) return;
+    if (!status?.running && !status?.refilling) return;
     const t = setInterval(() => setVersion((v) => v + 1), 12000);
     return () => clearInterval(t);
-  }, [status?.running]);
+  }, [status?.running, status?.refilling]);
 
   /** Single mail -> run now. Several -> preview + confirm first. Always offer Undo afterwards. */
   const act = useCallback(async (ids, action, param) => {
@@ -102,9 +102,12 @@ function Dashboard({ email }) {
         <div className="card" role="status">
           <b>{firstSync ? "Setting up your inbox…" : "Syncing…"}</b>
           <div className="bar"><div style={{ width: status.total ? `${(100 * status.fetched) / status.total}%` : "5%" }} /></div>
-          <span className="muted">{status.fetched} of {status.total || "?"} mails read, then grouping</span>
+          <span className="muted">{status.fetched} of {status.total || "?"} mails read; groups and topics grow in small batches as they load</span>
           <div className="muted" style={{ marginTop: 6 }}>{stopping ? "Stopping… mails already read are kept." : "You can press Stop at any time; mails already read are kept."}</div>
         </div>
+      )}
+      {!status?.running && status?.refilling && (
+        <p className="muted" role="status">Mail left your inbox view, so older mail is being loaded in small batches to keep it full.</p>
       )}
       {!status?.running && status?.stopped && (
         <p className="muted">Sync stopped. {status.fetched} mails from that run were kept. Press <b>Sync now</b> to continue where it stopped.</p>

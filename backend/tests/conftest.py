@@ -22,8 +22,10 @@ class FakeGmail:
     def search(self, query, limit):
         import re
         want = re.search(r"from:(\S+)", query)
+        before = re.search(r"before:(\d+)", query)
         ids = [m.message_id for m in sorted(self.mails.values(), key=lambda m: m.date, reverse=True)
-               if "TRASH" not in m.labels and (not want or want.group(1) in m.sender)]
+               if "TRASH" not in m.labels and (not want or want.group(1) in m.sender)
+               and (not before or m.date.timestamp() < int(before.group(1)))]
         return ids[:limit], len(ids)
     def get_message(self, mid): return self.mails[mid]
     def profile_history_id(self): return self.history

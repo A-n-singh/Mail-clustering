@@ -7,6 +7,7 @@ cancel_sync = threading.Event()
 # row stays behind and would look like a running sync forever. These in-memory flags are the truth for this process.
 sync_active = threading.Event()
 topics_active = threading.Event()
+refill_active = threading.Event()  # older mail is being pulled in after mail left (trash / Gmail-side delete)
 STOPPED = "stopped by you"  # stored in sync_runs.error so the dashboard can tell a stop from a failure
 
 

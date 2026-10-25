@@ -210,6 +210,43 @@ def recluster_due(db: Session) -> bool:
     return datetime.now(timezone.utc) - ended > timedelta(days=settings.recluster_days)
 
 
+def _live_count(db: Session) -> int:
+    return db.scalar(select(func.count()).select_from(Message).where(Message.in_trash == False)) or 0  # noqa: E712
+
+
+def _last_build_size(db: Session) -> int:
+    last = db.scalar(select(TopicRun).where(TopicRun.ended.is_not(None), TopicRun.error.is_(None)).order_by(TopicRun.id.desc()))
+    return last.messages if last else 0
+
+
+def _milestones() -> list[int]:
+    return sorted(int(x) for x in settings.topic_milestones.split(",") if x.strip().isdigit())
+
+
+def progress(db: Session, embedder: Embedder | None = None):
+    """Called after every batch while mail is loading. Embeds the new mail and puts it into the nearest existing topic (cheap).
+    Topics are built from scratch only when the mailbox first reaches a milestone (default 30, 200, 1000 mails), because
+    placing mail into existing topics can never create a new theme."""
+    if not settings.topics_enabled:
+        return
+    embedder = embedder or get_embedder()
+    if stale_embeddings(db, embedder.name) > 0:
+        return  # the model changed: after_sync recomputes everything, so do not mix vectors in between
+    n, last = _live_count(db), _last_build_size(db)
+    if any(m > last and n >= m for m in _milestones()):
+        recluster(db, embedder)
+    else:
+        assign_new(db, embedder)
+        refresh_sizes(db)
+        db.commit()
+
+
+def grown_since_build(db: Session) -> bool:
+    """The mailbox is now much bigger than when topics were last built, so new themes may be missing."""
+    n, last = _live_count(db), _last_build_size(db)
+    return n >= settings.topic_min_messages and last > 0 and n >= 1.5 * last
+
+
 def after_sync(db: Session, embedder: Embedder | None = None):
     """Called after every sync: weekly full re-cluster, otherwise assign the new mail to existing topics."""
     if not settings.topics_enabled:
@@ -219,7 +256,7 @@ def after_sync(db: Session, embedder: Embedder | None = None):
     embedder = embedder or get_embedder()
     # EMBED_MODEL changed: every vector is recomputed and the topics are rebuilt now (old topics were built from the old model's
     # vectors, and new mail could not be placed next to them), not at the next weekly rebuild.
-    if stale_embeddings(db, embedder.name) > 0 or recluster_due(db):
+    if stale_embeddings(db, embedder.name) > 0 or recluster_due(db) or grown_since_build(db):
         recluster(db, embedder)
     else:
         assign_new(db, embedder)
