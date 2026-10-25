@@ -31,7 +31,7 @@ then run `docker compose exec backend python -m app.doctor --live`.
 2. The site opens over https and shows the sign-in page.
 3. Sign in completes and you land on the dashboard.
 4. `doctor --live` says Gmail works.
-5. **Sync now**: the progress bar moves, then the counts appear.
+5. **Sync now**: the progress bar moves, and groups and topics start to appear and grow while the first load is still running (25 mails per batch, newest 1,000 mails kept).
 6. After a few minutes the **Topic map** shows clusters.
 7. Open one mail; trash one mail and press Undo.
 Keep `ALLOW_PERMANENT_DELETE=false` until you have looked at your real clusters.

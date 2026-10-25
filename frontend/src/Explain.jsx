@@ -12,14 +12,14 @@ const TEXTS = {
     ["Size and colour", "A bigger ball means more mails. Each sender has its own colour, the same colour as its name under the hologram."],
     ["Moving around", "Drag to turn it and pinch or scroll to zoom. Tap a ball and the camera flies to it; tap it again, or its name below, to go inside. Tap empty space to fly back out."],
     ["Inside a sender", "You get a smaller hologram with one ball per kind of subject, such as 'Your order # has shipped', plus the mail list. Tap a dot to read that mail. Read one sample before deciding about all of them."],
-    ["Safety", "Each group keeps up to 360 mails, and older mail is pulled in as you clean. Nothing is trashed or archived without a confirm box, and every action can be undone in Action log."],
+    ["Safety", "Smart Inbox keeps your newest mails here: up to 1,000 in total and up to 360 per group. When mail leaves, older mail is pulled in a few at a time, so the picture stays full. Nothing is trashed or archived without a confirm box, and every action can be undone in Action log."],
   ],
   map: [
     ["What you are looking at", "Your mail placed by meaning, not by sender. Mails that say similar things sit close together and share a colour. Each coloured group is a topic."],
     ["How topics are made", "Each mail is turned into a set of numbers from its sender name, subject and a short snippet, by a small model that runs on your own server. Dense neighbourhoods become topics. A topic is named by the subject most of its mails share, with order numbers dropped; a mixed topic gets a short heading from a small model on your own server, checked by simple rules, or else its most typical subject. Hologram 3D and List show the same data."],
     ["Grey dots and the review bucket", "Mail that fits no topic stays grey. The Review bucket lists it, most important first, so nothing is hidden."],
     ["Going inside", "Click a ball, or choose a topic and press Go inside, and the mails of that topic are grouped again into a new hologram of smaller groups. You can keep going until a group is too small to split, then you see its mails as a list. The path above the hologram shows where you are, and Back or any step in it takes you out. Topics groups by sender name, subject and snippet. Kinds groups all mail by what the subject says, so delivery mail from different shops lands together, and going inside a kind can then split it by sender. It all runs on your server and the first time can take up to a minute."],
-    ["Using it", "Click a topic button to focus it. Drag to turn, scroll to zoom, hover to see a subject and click to open the mail. Lasso selects many mails at once, then pick Trash, Archive and so on. Topics rebuild every week, or press Rebuild topics."],
+    ["Using it", "Click a topic button to focus it. Drag to turn, scroll to zoom, hover to see a subject and click to open the mail. Lasso selects many mails at once, then pick Trash, Archive and so on. While mail is still loading, new mail is placed into the nearest topic in small batches, and the topics are rebuilt from scratch when the mailbox first reaches 30, 200 and 1,000 mails. After that they rebuild every week, or press Rebuild topics."],
   ],
   digest: [
     ["What this page is", "A short summary: the mail that needs action and your biggest groups."],

@@ -203,7 +203,7 @@ function Groups({ version, act }) {
             </div>
           )}
           {groups && groups.some((g) => g.gmail_total > g.count) && (
-            <p className="muted">Some groups are capped at 360 kept mails; older mail is pulled in as you clean.</p>
+            <p className="muted">Only the newest mail is kept here (up to 1,000 in total, 360 per group); older mail is pulled in as you clean.</p>
           )}
           </Explain>
         </div>

@@ -39,13 +39,22 @@ Mail is also grouped **by topic across senders**. Each mail is turned into a vec
 **on this machine** (`fastembed`, about 0.1 GB downloaded on first use; nothing is sent anywhere). Vectors are reduced with
 UMAP, clustered with HDBSCAN, and a mail that sits far from its own cluster goes to the **review bucket**. Topics are named by the pipeline in *Topic headings* below.
 3D coordinates are stored, so the map tabs only read them.
-New mail is placed into the nearest topic after every sync; topics are rebuilt weekly (`RECLUSTER_DAYS`) or with **Rebuild topics**.
+While mail is loading, every batch of `BATCH_SIZE` (25) mails is embedded and placed into the nearest topic, and topics are built from scratch only when the
+mailbox first reaches a milestone (`TOPIC_MILESTONES`, default 30, 200 and 1,000 live mails): placing mail into existing topics can never create a new theme.
+After a sync, topics are also rebuilt when the mailbox has grown 1.5x since the last build, weekly (`RECLUSTER_DAYS`), or with **Rebuild topics**.
 Topic IDs stay stable across rebuilds. Lasso-select dots to trash/archive/star in bulk (same confirm + Undo + protection rules).
+
+### Loading in batches and the mailbox cap
+The app keeps a local copy of at most `USER_CAP` (default 1,000) live mails, newest first (`INITIAL_FETCH` is 1,000 on the first sync). Gmail itself is never
+touched by the cap. Urgent and needs-reply mail is never dropped, so a mailbox full of those can stay above the cap. When mail leaves (trashed here, or deleted in Gmail),
+the app pulls in mail **older than the oldest one kept**, `BATCH_SIZE` (25) at a time, until the cap is full again; after each batch topics are updated and
+the screen refreshes. A batch hook failing (for example the embedding model not yet downloaded) never stops mail from loading. `GMAIL_RATE_PER_SEC` (8) paces Gmail calls.
+Per-user caps for a multi-user pilot are described in `CLAUDE.md` (not built yet).
 
 ### Changing the embedding model
 `EMBED_MODEL` can be changed at any time (the default `BAAI/bge-small-en-v1.5` was kept after a benchmark of nine models). Each stored vector remembers
 which model made it. At the next sync, if any mail carries a vector from a different model, **every vector is recomputed and the topics are rebuilt
-right away** (not at the weekly rebuild), so vectors of two models are never mixed. It takes a few minutes for a few thousand mails, can be stopped and
+right away** (not at the weekly rebuild), so vectors of two models are never mixed. It takes a few minutes for a full mailbox (at most `USER_CAP` mails), can be stopped and
 resumed (only what is still stale is redone), and settles after one rebuild. `python -m app.doctor` shows whether your stored vectors match.
 
 #### Comparison of nine embedding models
@@ -68,9 +77,8 @@ run through the same UMAP + HDBSCAN pipeline the app uses. Sorted by size.
 - **Purity**: how single-category the clusters are. **Clustered**: share of mail that landed in a topic instead of the review bucket.
 - **CPU time**: time to embed all 2,040 mails, including model load (some runs include the first download). MTEB figures are the published clustering averages from the model cards.
 
-**Result.** The other models were only about 1 to 4 points better at 3 to 9 times the size or time, so `bge-small-en-v1.5` was kept. The first upgrade
-to try if real topics look mixed is **gte-base** (+2.1 kNN, +2.7 purity, +3.4 clustered, about 2.7x the time and 6x the size). arctic-embed-m gives the purest
-clusters; mxbai-embed-large is about 9x slower and no better than gte-base.
+**Result.** The other models were only about 1 to 4 points better at 3 to 9 times the size or time, so `bge-small-en-v1.5` was kept. No model change is planned;
+the table is only a record of the comparison. (If `EMBED_MODEL` is ever changed on purpose, the guard above recomputes everything.)
 
 **Caveats.** Single run per model. The emails are synthetic, English-only, in 6 broad categories, so gaps of 1 to 2 points may be noise (the pipeline makes
 about 100 fine clusters, so completeness/ARI against 6 labels are not meaningful and are left out). Hindi/Hinglish mail was not tested.
