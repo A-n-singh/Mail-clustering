@@ -57,8 +57,6 @@ def db():
 @pytest.fixture(autouse=True)
 def _reset_stop_flag():
     from app import control
-    for f in (control.cancel_sync, control.sync_active, control.topics_active):
-        f.clear()
+    control.reset_all()
     yield
-    for f in (control.cancel_sync, control.sync_active, control.topics_active):
-        f.clear()
+    control.reset_all()

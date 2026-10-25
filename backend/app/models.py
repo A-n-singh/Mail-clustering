@@ -3,15 +3,26 @@ from datetime import datetime, timezone
 from sqlalchemy import JSON, Boolean, LargeBinary, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .db import Base
+from .db import Base, CentralBase
 
 
 def now():
     return datetime.now(timezone.utc)
 
 
+class User(CentralBase):
+    """Everyone who has signed in. The mailbox itself is NOT here: it lives in that user's own database (`data_key`)."""
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String, unique=True)  # lower case
+    data_key: Mapped[str] = mapped_column(String, default="")  # "main" (the owner, main database) or "u<id>" (own database file)
+    role: Mapped[str] = mapped_column(String, default="member")  # owner | member
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Owner(Base):
-    """The one signed-in Google account and its encrypted refresh token."""
+    """The Google account of THIS database's user and its encrypted refresh token (one row per user database)."""
     __tablename__ = "owner"
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String, unique=True)

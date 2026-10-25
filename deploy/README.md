@@ -26,6 +26,14 @@ docker compose exec backend python -m app.doctor --model     # plain-language ch
 Open `https://myinbox.duckdns.org`, press **Sign in with Google** (Google warns the app is unverified: *Advanced > Go to ...*),
 then run `docker compose exec backend python -m app.doctor --live`.
 
+## Adding pilot users (up to `MAX_USERS`, default 10)
+1. **Google Cloud console** (the same project and OAuth client, nothing else changes): *Google Auth platform > Audience*: keep **Testing**, and under **Test users** add each person's Gmail address (up to 100 are allowed).
+   Do not add scopes or redirect URIs: they stay `gmail.modify` and `https://<your domain>/auth/callback`. Each person sees the "unverified app" warning (*Advanced > Go to ...*) and has to sign in again about every 7 days while the app is in Testing.
+2. **On the VM**: put the same addresses in `deploy/.env`, e.g. `ALLOWED_EMAILS=ann@gmail.com,bob@gmail.com` (the owner is `OWNER_EMAIL`), then `docker compose up -d` to apply it.
+3. Each person opens the site and presses **Sign in with Google**. They get their own mailbox (a file `users/u<number>.db` inside the `data` volume); nobody can see anyone else's mail.
+4. To remove someone: delete their address from `ALLOWED_EMAILS` and `docker compose up -d` (they are locked out at once), and remove them from the Google Test users. Their own **Account > Delete** erases their mailbox file and token.
+Both the Google Test-user list and `ALLOWED_EMAILS` must contain the address: Google decides who may reach the sign-in page, the app decides who may enter.
+
 ## First-run checklist (tell me which step fails and paste the doctor output, never the secrets)
 1. `doctor --model` shows no red lines.
 2. The site opens over https and shows the sign-in page.
@@ -39,12 +47,12 @@ Keep `ALLOW_PERMANENT_DELETE=false` until you have looked at your real clusters.
 ## Everyday
 - Logs: `docker compose logs -f backend`
 - Update: `git pull && docker compose up -d --build`
-- Backup: `./backup.sh`
+- Backup: `./backup.sh` (one `smart-inbox-DATE.tar.gz` holding `mail.db` = the owner and `u<number>.db` = every other user; copy it off the VM). To restore, copy the files back into the `data` volume (`mail.db` and the `users/` folder) while the backend is stopped.
 - Stop: `docker compose down` (your data stays; add `-v` only if you want to erase it)
 - In Google's *Testing* mode the sign-in expires every 7 days; just sign in again.
 
 ## Safety
-Only the account in `OWNER_EMAIL` can sign in. The Google token is stored encrypted with `TOKEN_KEY`. The backend is not
+Only `OWNER_EMAIL` and the addresses in `ALLOWED_EMAILS` can sign in, and each has a separate database file. The Google token is stored encrypted with `TOKEN_KEY`. The backend is not
 exposed to the internet, only Caddy is (ports 80/443). Keep `.env` private (`chmod 600`, already done by `init-env.sh`).
 
 ## If a sync fails with "rateLimitExceeded"

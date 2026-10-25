@@ -24,9 +24,14 @@ LEAF_BELOW = 16        # a group smaller than this is just shown as a list
 TTL = 6 * 3600
 
 _lock = threading.RLock()
-_cache: dict[str, dict] = {}
-_cache_sig: object = None
-_subject_vecs: dict[tuple[str, str], np.ndarray] = {}
+_cache: dict[tuple[int, str], dict] = {}      # (whose mailbox, path): every user has their own results
+_cache_sigs: dict[int, object] = {}
+_subject_vecs: dict[tuple[int, str, str], np.ndarray] = {}   # (whose mailbox, model, mail id): mail ids of two users may be equal
+
+
+def _ns(db: Session) -> int:
+    """Identifies this user's database, so one user's saved results are never shown to another."""
+    return id(db.get_bind())
 
 
 def _sig(db: Session):
@@ -62,16 +67,17 @@ def members(db: Session, path: str) -> list[str]:
     return got
 
 
-def _subject_matrix(ids: list[str], msgs: dict[str, Message]) -> np.ndarray:
+def _subject_matrix(db: Session, ids: list[str], msgs: dict[str, Message]) -> np.ndarray:
     """What the subject says, nothing else, so 'Delivered' from Amazon and from Flipkart land together."""
     emb = get_embedder()
-    todo = [i for i in ids if (emb.name, i) not in _subject_vecs]      # keyed by model too: a changed model never reuses old vectors
+    ns = _ns(db)
+    todo = [i for i in ids if (ns, emb.name, i) not in _subject_vecs]      # keyed by model too: a changed model never reuses old vectors
     for s in range(0, len(todo), 64):
         chunk = todo[s:s + 64]
         vecs = emb.embed([msgs[i].subject or msgs[i].sender or "(no subject)" for i in chunk])
         for i, v in zip(chunk, vecs):
-            _subject_vecs[(emb.name, i)] = v / max(float(np.linalg.norm(v)), 1e-9)
-    return np.vstack([_subject_vecs[(emb.name, i)] for i in ids])
+            _subject_vecs[(ns, emb.name, i)] = v / max(float(np.linalg.norm(v)), 1e-9)
+    return np.vstack([_subject_vecs[(ns, emb.name, i)] for i in ids])
 
 
 def _leaf(path: str, n: int, reason: str) -> dict:
@@ -89,7 +95,7 @@ def _build(db: Session, path: str) -> dict:
     by_subject = path == "k"
     if by_subject:
         ids = [i for i in ids if i in msgs]
-        X = _subject_matrix(ids, msgs)
+        X = _subject_matrix(db, ids, msgs)
     else:
         emb = get_embedder()
         ensure_embeddings(db, emb)  # the stored vectors know the sender too, so a split can follow who sent it
@@ -135,17 +141,18 @@ def _build(db: Session, path: str) -> dict:
 
 
 def get_node(db: Session, path: str) -> dict:
-    global _cache_sig
+    ns = _ns(db)
     with _lock:
         sig = _sig(db)
-        if sig != _cache_sig:   # topics were rebuilt: every saved result is out of date
-            _cache.clear()
-            _cache_sig = sig
-        ent = _cache.get(path)
+        if sig != _cache_sigs.get(ns):   # this user's topics were rebuilt: their saved results are out of date
+            for k in [k for k in _cache if k[0] == ns]:
+                del _cache[k]
+            _cache_sigs[ns] = sig
+        ent = _cache.get((ns, path))
         if ent and time.time() - ent["at"] < TTL:
             return ent["node"]
         node = _build(db, path)
-        _cache[path] = {"at": time.time(), "node": node}
+        _cache[(ns, path)] = {"at": time.time(), "node": node}
         return node
 
 

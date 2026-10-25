@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     # Only this Google account may sign in (single-owner app).
     owner_email: str = ""
+    # Pilot: who may sign in. OWNER_EMAIL always may (and is the admin); ALLOWED_EMAILS = more Google accounts, comma separated.
+    allowed_emails: str = ""
+    max_users: int = 10  # at most this many accounts can ever sign up (the owner is always let in)
+    # Each user's mail lives in their own database file, so one user can never see another's data. Empty = a "users" folder
+    # next to the main database file (the owner keeps using the main database, so nothing has to be moved).
+    user_data_dir: str = ""
     initial_fetch: int = 1000  # newest mails pulled on first sync
     user_cap: int = 1000  # max live mails kept locally in total; older mail is pulled in again as mail leaves
     batch_size: int = 25  # mails read, embedded and placed into topics per batch while loading

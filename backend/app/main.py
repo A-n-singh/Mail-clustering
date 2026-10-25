@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 from . import actions as act
 from . import auth
 from .config import settings
-from .db import Base, SessionLocal, engine, get_db
+from . import db as dbmod
+from . import users
+from .db import Base, CentralBase, engine, get_central_db, get_db
 from .gmail import GmailClient, GoogleGmailClient, gmail_web_url
 from .models import Action, Cluster, Message, MessageCluster, MessageTopic, Owner, Score, SyncRun, Topic, TopicRun
 from .security import decrypt, encrypt
@@ -28,8 +30,13 @@ from .sync import close_orphan_runs, run_sync, sync_in_progress
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
-    with SessionLocal() as db:
-        close_orphan_runs(db)  # a restart mid-sync must not leave a phantom 'running' sync behind
+    CentralBase.metadata.create_all(engine)
+    with dbmod.central_session() as central:
+        users.ensure_owner(central)
+        keys = [u.data_key for u in users.all_users(central)]
+    for key in keys:
+        with dbmod.open_user_session(key) as db:
+            close_orphan_runs(db)  # a restart mid-sync must not leave a phantom 'running' sync behind
     task = asyncio.create_task(_scheduler()) if settings.sync_interval_minutes > 0 else None
     yield
     if task:
@@ -67,30 +74,37 @@ def _on_batch(db: Session, _done: int):
         db.rollback()
 
 
-def _refill_job():
+def _refill_job(key: str):
     """After mail left (trash, or deleted in Gmail): pull older mail back in, a few at a time, until the cap is full again."""
-    if control.sync_active.is_set() or control.refill_active.is_set():
-        return
-    control.refill_active.set()
-    try:
-        with SessionLocal() as db:
-            gmail = build_gmail(db)
-            if gmail:
-                refill_user_in_batches(db, gmail, settings.user_cap, settings.batch_size, _on_batch,
-                                       cancelled=lambda: control.sync_active.is_set())
-    except Exception:
-        pass  # nothing is lost: the next sync or trash action tries again
-    finally:
-        control.refill_active.clear()
+    with control.scope(key):
+        if control.sync_active.is_set() or control.refill_active.is_set():
+            return
+        control.refill_active.set()
+        try:
+            with dbmod.open_user_session(key) as db:
+                gmail = build_gmail(db)
+                if gmail:
+                    refill_user_in_batches(db, gmail, settings.user_cap, settings.batch_size, _on_batch,
+                                           cancelled=lambda: control.sync_active.is_set())
+        except Exception:
+            pass  # nothing is lost: the next sync or trash action tries again
+        finally:
+            control.refill_active.clear()
 
 
-def _sync_job(already_marked: bool = False):
+def _sync_job(key: str, already_marked: bool = False):
+    """One user's sync, run in the background. `key` is that user's data key."""
+    with control.scope(key):
+        _sync_job_inner(key, already_marked)
+
+
+def _sync_job_inner(key: str, already_marked: bool):
     if not already_marked:
         if control.sync_active.is_set():
             return
         control.sync_active.set()
     try:
-        with SessionLocal() as db:
+        with dbmod.open_user_session(key) as db:
             gmail = build_gmail(db)
             if not gmail:
                 return
@@ -100,7 +114,7 @@ def _sync_job(already_marked: bool = False):
             except Exception:
                 return  # recorded in sync_runs.error; next run resumes
             if run.error == control.STOPPED:
-                return  # the owner stopped it: do not start the (long) topic build afterwards
+                return  # the user stopped it: do not start the (long) topic build afterwards
             try:  # mail may have left Gmail meanwhile: top the mailbox back up, in batches
                 refill_user_in_batches(db, gmail, settings.user_cap, settings.batch_size, _on_batch,
                                        cancelled=lambda: control.cancel_sync.is_set())
@@ -114,11 +128,19 @@ def _sync_job(already_marked: bool = False):
         control.sync_active.clear()
 
 
+def _sync_all():
+    """The scheduled sync: every user in turn (one at a time, so ten users never load at once)."""
+    with dbmod.central_session() as central:
+        keys = [u.data_key for u in users.all_users(central)]
+    for key in keys:
+        _sync_job(key)
+
+
 async def _scheduler():
-    """Sync every SYNC_INTERVAL_MINUTES without blocking the app."""
+    """Sync everyone every SYNC_INTERVAL_MINUTES without blocking the app."""
     while True:
         await asyncio.sleep(settings.sync_interval_minutes * 60)
-        await asyncio.to_thread(_sync_job)
+        await asyncio.to_thread(_sync_all)
 
 
 @app.get("/health")
@@ -138,7 +160,7 @@ def login():
 
 
 @app.get("/auth/callback")
-def callback(code: str, state: str, request: Request, db: Session = Depends(get_db)):
+def callback(code: str, state: str, request: Request, central: Session = Depends(get_central_db)):
     from google.auth.transport.requests import Request as GoogleRequest
     from google.oauth2 import id_token
     saved = auth.read_oauth_cookie(request.cookies.get(auth.OAUTH_COOKIE))
@@ -151,12 +173,17 @@ def callback(code: str, state: str, request: Request, db: Session = Depends(get_
     email = info["email"]
     if not auth.is_allowed(email):
         raise HTTPException(403, "This account is not allowed")
+    try:
+        user = users.get_or_create(central, email)
+    except users.PilotFull as e:
+        raise HTTPException(403, str(e))
     if flow.credentials.refresh_token:
-        db.merge(Owner(id=1, email=email, refresh_token_enc=encrypt(flow.credentials.refresh_token)))
-        db.commit()
+        with dbmod.open_user_session(user.data_key) as udb:  # the token is kept in THAT user's own database
+            udb.merge(Owner(id=1, email=email, refresh_token_enc=encrypt(flow.credentials.refresh_token)))
+            udb.commit()
     resp = RedirectResponse(settings.frontend_url)
     resp.delete_cookie(auth.OAUTH_COOKIE)
-    resp.set_cookie(auth.COOKIE, auth.make_session(email), httponly=True, secure=settings.frontend_url.startswith("https"),
+    resp.set_cookie(auth.COOKIE, auth.make_session(email, user.id, user.data_key), httponly=True, secure=settings.frontend_url.startswith("https"),
                     samesite="lax", max_age=auth.MAX_AGE)
     return resp
 
@@ -169,13 +196,14 @@ def logout():
 
 
 @app.get("/me")
-def me(email: str = Depends(auth.current_user)):
-    return {"email": email}
+def me(user: auth.Principal = Depends(auth.current_user)):
+    return {"email": user.email}
 
 
 @app.delete("/account")
-def delete_account(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
-    """Revoke the Google token and erase every row."""
+def delete_account(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user),
+                   central: Session = Depends(get_central_db)):
+    """Revoke the Google token and erase every row of THIS user's mailbox, and take them off the user list."""
     import httpx
     owner = db.scalar(select(Owner))
     if owner:
@@ -186,23 +214,27 @@ def delete_account(db: Session = Depends(get_db), _: str = Depends(auth.current_
     for t in reversed(Base.metadata.sorted_tables):
         db.execute(t.delete())
     db.commit()
+    users.forget(central, user.email)
+    if user.data_key != "main":
+        db.close()
+        dbmod.drop_user_data(user.data_key)  # their own database file goes away completely
     return {"ok": True}
 
 
 # ---------- sync ----------
 @app.post("/sync")
-def sync(background: BackgroundTasks, db: Session = Depends(get_db), _: str = Depends(auth.current_user),
+def sync(background: BackgroundTasks, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user),
          __: GmailClient = Depends(get_gmail)):
     """Start a sync in the background; poll /sync/status for progress."""
     if sync_in_progress(db):
         return {"started": False, "reason": "already running"}
     control.sync_active.set()  # claim it now so a double click cannot start two syncs
-    background.add_task(_sync_job, True)
+    background.add_task(_sync_job, user.data_key, True)
     return {"started": True}
 
 
 @app.post("/sync/stop")
-def sync_stop(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def sync_stop(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     """Stop the running sync as soon as possible. Mail already read is kept; Sync now continues from there."""
     if not sync_in_progress(db):
         close_orphan_runs(db)  # heal a leftover "running" row from a restart
@@ -212,7 +244,7 @@ def sync_stop(db: Session = Depends(get_db), _: str = Depends(auth.current_user)
 
 
 @app.get("/sync/status")
-def sync_status(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def sync_status(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     run = db.scalar(select(SyncRun).order_by(SyncRun.id.desc()))
     stopped = bool(run and run.error == control.STOPPED)
     return {"running": sync_in_progress(db), "fetched": run.fetched if run else 0,
@@ -223,15 +255,15 @@ def sync_status(db: Session = Depends(get_db), _: str = Depends(auth.current_use
 
 
 # ---------- dashboard data ----------
-def _row(m: Message, s: Score | None):
+def _row(m: Message, s: Score | None, email: str):
     return {"message_id": m.message_id, "sender": m.sender, "subject": m.subject,
-            "date": m.date.isoformat(), "labels": m.labels, "gmail_link": gmail_web_url(m.thread_id, settings.owner_email),
+            "date": m.date.isoformat(), "labels": m.labels, "gmail_link": gmail_web_url(m.thread_id, email),
             "list_unsubscribe": m.list_unsubscribe, "class": s.cls if s else None,
             "score": s.importance_score if s else None, "reason": s.reason if s else None}
 
 
 @app.get("/summary")
-def summary(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def summary(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     live = Message.in_trash == False  # noqa: E712
     total = db.scalar(select(func.count()).select_from(Message).where(live))
     grouped = db.scalar(select(func.count()).select_from(MessageCluster).join(
@@ -242,11 +274,11 @@ def summary(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
 
 
 @app.get("/needs-action")
-def needs_action(limit: int = 50, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def needs_action(limit: int = 50, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     q = (select(Message, Score).join(Score, Score.message_id == Message.message_id)
          .where(Score.cls.in_(["urgent", "needs_reply"]), Message.in_trash == False).order_by(Score.importance_score.desc(), Message.date.desc())
          .limit(limit))
-    return [_row(m, s) for m, s in db.execute(q)]
+    return [_row(m, s, user.email) for m, s in db.execute(q)]
 
 
 def _filters(since_days, date_from, date_to, sender, label, min_score):
@@ -268,7 +300,7 @@ def _filters(since_days, date_from, date_to, sender, label, min_score):
 
 
 @app.get("/groups")
-def groups(db: Session = Depends(get_db), _: str = Depends(auth.current_user),
+def groups(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user),
            since_days: int | None = None, date_from: date | None = None, date_to: date | None = None,
            sender: str | None = None, label: str | None = None, min_score: int = 0):
     """Bubble data: size = mail count, color = average importance. Filters update it live."""
@@ -284,7 +316,7 @@ def groups(db: Session = Depends(get_db), _: str = Depends(auth.current_user),
 
 
 @app.get("/groups/hologram")
-def groups_hologram(db: Session = Depends(get_db), _: str = Depends(auth.current_user),
+def groups_hologram(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user),
                     since_days: int | None = None, date_from: date | None = None, date_to: date | None = None,
                     sender: str | None = None, label: str | None = None, min_score: int = 0):
     """The Groups tab as a hologram: same data as /groups, but every mail is a node. Same shape as /map
@@ -312,7 +344,7 @@ def groups_hologram(db: Session = Depends(get_db), _: str = Depends(auth.current
 @app.get("/groups/{cluster_id}/hologram")
 def group_hologram(cluster_id: int, since_days: int | None = None, date_from: date | None = None,
                    date_to: date | None = None, sender: str | None = None, label: str | None = None,
-                   min_score: int = 0, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+                   min_score: int = 0, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     """Inside one group: its mails as a hologram, one ball per subject template ('Your order # has shipped').
     The 12 biggest templates get a ball; the rest are loose grey nodes (t = null)."""
     q = (select(Message.message_id, Message.subject, Message.sender, Message.subject_key)
@@ -334,7 +366,7 @@ def group_hologram(cluster_id: int, since_days: int | None = None, date_from: da
 
 
 @app.get("/groups/{cluster_id}/subjects")
-def group_subjects(cluster_id: int, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def group_subjects(cluster_id: int, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     """Subject templates inside a group ('Your order # has shipped'), biggest first, with message ids
     so a whole template can be bulk-actioned."""
     rows = db.execute(select(Message.subject_key, Message.message_id, Message.size_bytes)
@@ -348,7 +380,7 @@ def group_subjects(cluster_id: int, db: Session = Depends(get_db), _: str = Depe
 
 
 @app.get("/storage")
-def storage(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def storage(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     """Where the space is going, and how much Trash will free up once Gmail empties it (after 30 days)."""
     def total(flag):
         return db.scalar(select(func.coalesce(func.sum(Message.size_bytes), 0)).where(Message.in_trash == flag))
@@ -364,13 +396,13 @@ def storage(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
 @app.get("/groups/{cluster_id}/messages")
 def group_messages(cluster_id: int, since_days: int | None = None, date_from: date | None = None,
                    date_to: date | None = None, sender: str | None = None, label: str | None = None,
-                   min_score: int = 0, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+                   min_score: int = 0, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     q = (select(Message, Score).join(MessageCluster, MessageCluster.message_id == Message.message_id)
          .outerjoin(Score, Score.message_id == Message.message_id)
          .where(MessageCluster.cluster_id == cluster_id, Message.in_trash == False,  # noqa: E712
                 *_filters(since_days, date_from, date_to, sender, label, min_score))
          .order_by(Message.date.desc()))
-    return [_row(m, s) for m, s in db.execute(q)]
+    return [_row(m, s, user.email) for m, s in db.execute(q)]
 
 
 # ---------- actions ----------
@@ -382,13 +414,13 @@ class ActionIn(BaseModel):
 
 
 @app.post("/actions/preview")
-def preview(body: ActionIn, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def preview(body: ActionIn, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     return act.bulk_preview(db, body.message_ids)
 
 
 @app.post("/actions")
 def do_action(body: ActionIn, background: BackgroundTasks, db: Session = Depends(get_db),
-              gmail: GmailClient = Depends(get_gmail), _: str = Depends(auth.current_user)):
+              gmail: GmailClient = Depends(get_gmail), user: auth.Principal = Depends(auth.current_user)):
     try:
         batch = act.perform(db, gmail, body.message_ids, body.action, body.param, body.confirmed)
     except act.ActionError as e:
@@ -397,18 +429,18 @@ def do_action(body: ActionIn, background: BackgroundTasks, db: Session = Depends
     if body.action == "trash":  # fill the cluster back up with older mail
         cids = set(db.scalars(select(MessageCluster.cluster_id).where(MessageCluster.message_id.in_(body.message_ids))))
         refilled = sum(refill(db, gmail, cid, settings.cluster_cap) for cid in cids)
-        background.add_task(_refill_job)  # and the whole mailbox back up to the cap, a few mails at a time
+        background.add_task(_refill_job, user.data_key)  # and the whole mailbox back up to the cap, a few mails at a time
     return {"batch_id": batch, "refilled": refilled}
 
 
 @app.post("/actions/{batch_id}/undo")
 def undo(batch_id: str, db: Session = Depends(get_db), gmail: GmailClient = Depends(get_gmail),
-         _: str = Depends(auth.current_user)):
+         user: auth.Principal = Depends(auth.current_user)):
     return {"undone": act.undo(db, gmail, batch_id)}
 
 
 @app.get("/actions/log")
-def action_log(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def action_log(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     rows = db.scalars(select(Action).order_by(Action.action_id.desc()).limit(100))
     return [{"batch_id": a.batch_id, "message_id": a.message_id, "action": a.action,
              "timestamp": a.timestamp.isoformat(), "undone": a.undone} for a in rows]
@@ -421,7 +453,7 @@ def _live_topic_rows(db: Session):
 
 
 @app.get("/topics")
-def topics(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def topics(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     q = (select(Topic.topic_id, Topic.label, Topic.summary, func.count(Message.message_id), func.avg(Score.importance_score))
          .join(MessageTopic, MessageTopic.topic_id == Topic.topic_id)
          .join(Message, Message.message_id == MessageTopic.message_id)
@@ -435,7 +467,7 @@ def topics(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
 
 
 @app.get("/map")
-def cluster_map(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def cluster_map(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     """Stored 2D coordinates only (no live UMAP). Compact keys: i=id, x, y, z, t=topic (null = review bucket), s=subject, f=sender."""
     rows = db.execute(select(MessageTopic.message_id, MessageTopic.x, MessageTopic.y, MessageTopic.z, MessageTopic.topic_id,
                              Message.subject, Message.sender)
@@ -446,7 +478,7 @@ def cluster_map(db: Session = Depends(get_db), _: str = Depends(auth.current_use
 
 
 @app.get("/topics/status")
-def topics_status(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def topics_status(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     run = db.scalar(select(TopicRun).order_by(TopicRun.id.desc()))
     running = control.topics_active.is_set()
     return {"running": running, "topics": run.topics if run else 0, "noise": run.noise if run else 0,
@@ -455,8 +487,8 @@ def topics_status(db: Session = Depends(get_db), _: str = Depends(auth.current_u
             "last_run": run.ended.isoformat() if run and run.ended else None}
 
 
-def _recluster_job():
-    with SessionLocal() as db:
+def _recluster_job(key: str):
+    with control.scope(key), dbmod.open_user_session(key) as db:
         try:
             topics_mod.recluster(db)
         except Exception:
@@ -464,26 +496,26 @@ def _recluster_job():
 
 
 @app.post("/topics/recluster")
-def topics_recluster(background: BackgroundTasks, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def topics_recluster(background: BackgroundTasks, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     if topics_status(db)["running"]:
         return {"started": False, "reason": "already running"}
-    background.add_task(_recluster_job)
+    background.add_task(_recluster_job, user.data_key)
     return {"started": True}
 
 
 @app.get("/topics/{topic_id}/messages")
-def topic_messages(topic_id: int, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def topic_messages(topic_id: int, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     """topic_id 0 = the review bucket (mail that fits no topic), most important first (FR-23)."""
     cond = MessageTopic.topic_id.is_(None) if topic_id == 0 else MessageTopic.topic_id == topic_id
     q = (select(Message, Score).join(MessageTopic, MessageTopic.message_id == Message.message_id)
          .outerjoin(Score, Score.message_id == Message.message_id)
          .where(cond, Message.in_trash == False)  # noqa: E712
          .order_by(Score.importance_score.desc(), Message.date.desc()).limit(500))
-    return [_row(m, s) for m, s in db.execute(q)]
+    return [_row(m, s, user.email) for m, s in db.execute(q)]
 
 
 @app.get("/hier/{path}")
-def hier_view(path: str, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def hier_view(path: str, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     """One level of 'hologram inside hologram'. path: t<topic id> | k, then .<child id> per level. Can take a while the first time."""
     try:
         return hier.view(db, path)
@@ -492,20 +524,20 @@ def hier_view(path: str, db: Session = Depends(get_db), _: str = Depends(auth.cu
 
 
 @app.get("/hier/{path}/messages")
-def hier_messages(path: str, sub: int | None = None, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def hier_messages(path: str, sub: int | None = None, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     try:
         q = hier.messages_query(db, path, sub)
     except KeyError:
         raise HTTPException(404, "unknown group")
-    return [_row(m, s) for m, s in db.execute(q)]
+    return [_row(m, s, user.email) for m, s in db.execute(q)]
 
 
 @app.get("/messages/{message_id}")
-def message_detail(message_id: str, db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def message_detail(message_id: str, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     m = db.get(Message, message_id)
     if not m:
         raise HTTPException(404, "not found")
-    return {**_row(m, db.scalar(select(Score).where(Score.message_id == message_id))), "snippet": m.snippet,
+    return {**_row(m, db.scalar(select(Score).where(Score.message_id == message_id)), user.email), "snippet": m.snippet,
             "preview": m.body_clean[:600], "body": m.body_clean[:20000], "size_bytes": m.size_bytes,
             "sender_email": m.sender_email}
 
@@ -515,7 +547,7 @@ CONFIRM_PHRASE = "DELETE FOREVER"
 
 
 @app.get("/trash")
-def trash_info(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
+def trash_info(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
     return {**trash_summary(db), "enabled": settings.allow_permanent_delete, "confirm_phrase": CONFIRM_PHRASE}
 
 
@@ -526,7 +558,7 @@ class PurgeIn(BaseModel):
 
 @app.post("/trash/purge")
 def trash_purge(body: PurgeIn, db: Session = Depends(get_db), gmail: GmailClient = Depends(get_gmail),
-                _: str = Depends(auth.current_user)):
+                user: auth.Principal = Depends(auth.current_user)):
     if not settings.allow_permanent_delete:
         raise HTTPException(403, "Permanent delete is turned off (set ALLOW_PERMANENT_DELETE=true and sign in again)")
     if body.confirm != CONFIRM_PHRASE:
@@ -539,5 +571,5 @@ def trash_purge(body: PurgeIn, db: Session = Depends(get_db), gmail: GmailClient
 
 # ---------- digest ----------
 @app.get("/digest")
-def digest(db: Session = Depends(get_db), _: str = Depends(auth.current_user)):
-    return {"needs_action": needs_action(10, db), "groups": sorted(groups(db), key=lambda g: -g["count"])[:10]}
+def digest(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user)):
+    return {"needs_action": needs_action(10, db, user), "groups": sorted(groups(db), key=lambda g: -g["count"])[:10]}

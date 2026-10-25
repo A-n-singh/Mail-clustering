@@ -68,7 +68,7 @@ S = sessionmaker(bind=eng, expire_on_commit=False)
 with S() as s:
     if not s.get(Owner, 1):
         s.add(Owner(id=1, email="demo@example.com", refresh_token_enc="x")); s.commit()
-m.SessionLocal = S
+dbmod.open_user_session = lambda key: S()   # every background job opens "the user's database": here the one demo database
 m.app.dependency_overrides[dbmod.get_db] = lambda: (yield from _gen())
 def _gen():
     s = S()

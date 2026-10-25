@@ -11,7 +11,7 @@ again), **Daily digest**, **Storage**, **Trash** (optional permanent delete), **
 the cleaned text; Sync now / Stop in the header. Urgent and needs-reply mail is protected from bulk actions.
 
 ## Phase 1 backend (`backend/`)
-FastAPI + SQLAlchemy. Google sign-in (owner-only), Gmail sync, sender grouping, rule-based scoring,
+FastAPI + SQLAlchemy. Google sign-in (invited accounts only; each user gets their own database file), Gmail sync, sender grouping, rule-based scoring,
 actions with Undo. Each cluster keeps at most `CLUSTER_CAP` (360) live mails and the whole mailbox at most `USER_CAP` (1,000); trashing refills both with older mail, a few at a time. Mail is read, embedded and placed into topics in small batches (`BATCH_SIZE`, 25), so groups and topics appear and grow on screen while a first load is still running. Run: `cd backend && pip install -r requirements.txt && cp .env.example .env && uvicorn app.main:app --reload`.
 Tests: `pytest`.
 
@@ -43,6 +43,12 @@ While mail is loading, every batch of `BATCH_SIZE` (25) mails is embedded and pl
 mailbox first reaches a milestone (`TOPIC_MILESTONES`, default 30, 200 and 1,000 live mails): placing mail into existing topics can never create a new theme.
 After a sync, topics are also rebuilt when the mailbox has grown 1.5x since the last build, weekly (`RECLUSTER_DAYS`), or with **Rebuild topics**.
 Topic IDs stay stable across rebuilds. Lasso-select dots to trash/archive/star in bulk (same confirm + Undo + protection rules).
+
+### Several users (pilot)
+The owner (`OWNER_EMAIL`) and any address in `ALLOWED_EMAILS` (comma separated) can sign in; `MAX_USERS` (10) limits how many accounts can ever sign up. Everyone has their **own
+database file** (`users/u<id>.db` next to `mail.db`; the owner keeps using `mail.db`), so one user can never see another's mail, and deleting an account deletes that file.
+Taking an address out of `ALLOWED_EMAILS` locks that person out at once. A central `users` table lists who has signed in. Postgres is not supported for several users yet (SQLite only).
+Google Cloud: keep the app in *Testing* and add each person's Gmail as a **Test user**; see `deploy/README.md`.
 
 ### Loading in batches and the mailbox cap
 The app keeps a local copy of at most `USER_CAP` (default 1,000) live mails, newest first (`INITIAL_FETCH` is 1,000 on the first sync). Gmail itself is never

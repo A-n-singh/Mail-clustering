@@ -1,8 +1,8 @@
 # CLAUDE.md: read this first (about 3 minutes). Facts are verified against the code; update this file when you change architecture.
 
 ## What this is
-**Smart Inbox**: a single-owner web app (one owner today; see "Pilot direction" below) that reads ONE Gmail mailbox, groups the mail (by sender and by topic), scores it, and lets the owner clean
-up in bulk with Undo. Everything runs on the owner's machine; no mail text goes to any third party and no cloud LLM is used.
+**Smart Inbox**: a web app that reads each signed-in user's Gmail mailbox, groups the mail (by sender and by topic), scores it, and lets the user clean
+up in bulk with Undo. Built as a small **invited-only pilot (max 10 users, each with their own database file)**; the owner (`OWNER_EMAIL`) is the first user and keeps working exactly as before. Everything runs on the owner's server; no mail text goes to any third party and no cloud LLM is used.
 Backend FastAPI + SQLAlchemy (SQLite default, Postgres optional). Frontend React 18 + Vite + d3 + three.js (dark "HUD" theme). Deploy: Docker Compose + Caddy.
 Owner talks Hinglish and prefers short plain answers; they decide scope, so propose before building anything not asked for.
 
@@ -11,39 +11,40 @@ Owner talks Hinglish and prefers short plain answers; they decide scope, so prop
 cd backend && pip install -r requirements.txt && cp .env.example .env && uvicorn app.main:app --reload     # API on :8000
 cd frontend && npm install && npm run dev                                                                   # UI on :5173, proxies /api -> :8000
 cd backend && python demo.py        # same app with a fake in-memory Gmail + 250 made-up mails, no Google needed (then npm run dev, click Sign in)
-cd backend && pytest -q             # 107 tests, ~35 s, all offline (FakeGmail + FakeEmbedder in tests/conftest.py and tests/test_topics.py)
+cd backend && pytest -q             # 117 tests, ~35 s, all offline (FakeGmail + FakeEmbedder in tests/conftest.py and tests/test_topics.py)
 cd frontend && npm test             # vitest, 2 tests;  npx vite build  to check the bundle
 python -m app.doctor [--model] [--live]     # plain-language setup check (run inside backend/)
 scripts/e2e_*.py                    # Playwright browser checks against demo.py + npm run dev (need `pip install playwright` and /opt/pw-browsers chromium)
 ```
-One uvicorn worker only (sync/topic flags in `control.py` are in-process). No DB migrations exist: `Base.metadata.create_all` only, so **never add/rename a
+One uvicorn worker only (job flags in `control.py` are in-process, kept per user). No DB migrations exist: `create_all` only (a NEW table such as `users` is fine), so **never add/rename a
 column on an existing table** without writing a migration (it would break every existing database).
 
 ## Backend map (`backend/app/`)
 | File | Job |
 |---|---|
-| `main.py` | App, lifespan (create tables, close orphaned runs, scheduler every `SYNC_INTERVAL_MINUTES`), every HTTP route; `_sync_job` (sync -> refill -> `after_sync`), `_on_batch` (topic progress per batch), `_refill_job` (background refill after a trash action) |
-| `auth.py`, `security.py` | Google OAuth + PKCE, signed session cookie, owner-only check; Fernet-encrypted refresh token |
+| `main.py` | App, lifespan (create tables, close orphaned runs, scheduler every `SYNC_INTERVAL_MINUTES`), every HTTP route; `_sync_job(key)` (sync -> refill -> `after_sync`), `_sync_all` (scheduler: every user in turn, one at a time), `_on_batch` (topic progress per batch), `_refill_job` (background refill after a trash action) |
+| `auth.py`, `security.py` | Google OAuth + PKCE; signed session cookie `{email, uid, dk}`; `current_user` -> `Principal(email, uid, data_key, is_owner)`, allow-list (`OWNER_EMAIL` + `ALLOWED_EMAILS`) re-checked on EVERY request (async on purpose: it also selects the user's job flags); Fernet-encrypted refresh token |
+| `users.py`, `db.py` | **Users**: central `users` table (`User` in `models.py`: id, email, `data_key`, role, created_at, last_login_at) in the main database. **One database per user**: `data_key` is `main` (the owner: the main database, so an existing install moves nothing) or `u<id>` (own SQLite file in `USER_DATA_DIR`, default `<folder of mail.db>/users/`). `get_db` = the signed-in user's own database, `open_user_session(key)` for background jobs, `get_central_db` for the user list, `drop_user_data`. `MAX_USERS` limits sign-ups (owner exempt). Keys are validated (`main` or `u<digits>`). SQLite only for now |
 | `config.py` | `Settings` from `.env` (see list below) |
 | `gmail.py` | Gmail client behind an interface; paced calls (`GMAIL_RATE_PER_SEC`), retries on rate limits |
-| `sync.py`, `sync_store.py`, `control.py` | History-ID incremental sync; resumable first sync; Stop keeps progress; in-memory running/cancel flags |
+| `sync.py`, `sync_store.py`, `control.py` | History-ID incremental sync; resumable first sync; Stop keeps progress; in-memory running/cancel flags **per user** (`control.flags(key)`; `control.cancel_sync` etc. are proxies to the CURRENT user's flags, selected by `control.use`/`scope`; jobs wrap themselves in `control.scope(key)`) |
 | `cleaning.py`, `scoring.py` | Strip HTML/quotes/signatures; rule-based class `urgent|needs_reply|fyi|junk` + 0-100 score + reason (`rules-v2`) |
 | `grouping.py`, `capacity.py` | Sender groups (domain, or address for free-mail); `subject_key` (digit-words -> `#`); cap 360 live mails per group (`enforce_cap`, `refill`) AND `USER_CAP`=1000 for the whole mailbox (`enforce_user_cap`, `refill_user`, `refill_user_in_batches`: pulls mail OLDER than the oldest kept, 25 at a time) |
 | `actions.py`, `purge.py`, `cleanup.py` | trash/archive/star/label/... with batch Undo + action log; bulk needs confirm and is BLOCKED on urgent/needs_reply (`PROTECTED`); guarded permanent delete |
 | `embeddings.py` | Local fastembed model (`EMBED_MODEL`, default `BAAI/bge-small-en-v1.5`, 384-d); text = `sender. subject. snippet[:200]`; stores `Embedding.model` per vector |
 | `topics.py` | embeddings -> UMAP (10-d to cluster, 3-d to draw) -> HDBSCAN -> outlier demotion -> Review bucket; stable topic ids (>=50% overlap); rebuild at load milestones (30/200/1000 live mails, `progress`), when the mailbox grew 1.5x (`grown_since_build`), weekly, or `/topics/recluster`; `assign_new` for new mail |
-| `hier.py` | "Hologram inside hologram": path `t<id>` or `k` (Kinds = all mail by SUBJECT only), `.n` per level; max depth 4; <16 mails = leaf list; in-memory cache |
+| `hier.py` | "Hologram inside hologram": path `t<id>` or `k` (Kinds = all mail by SUBJECT only), `.n` per level; max depth 4; <16 mails = leaf list; in-memory cache, namespaced per user database (mail ids of two users may be equal) |
 | `naming.py` | **Topic headings pipeline** (below). Used by `topics._store` and `hier._build` |
 | `holo_layout.py` | Deterministic 3D layout for the Groups hologram (groups on a sphere, mails in a ball); no clustering |
 | `doctor.py` | Setup check incl. heading model and "Stored vectors" (model-change) rows |
-| `models.py` | 12 tables: owner, messages, scores, clusters(+message_cluster), actions, sync_state, sync_runs, embeddings, topics(+message_topic), topic_runs |
+| `models.py` | Per-user database, 12 tables: owner (that user's Google account + encrypted token, one row), messages, scores, clusters(+message_cluster), actions, sync_state, sync_runs, embeddings, topics(+message_topic), topic_runs. Plus the central `users` table in the main database |
 
-Routes (all but `/health` and `/auth/*` need the owner cookie): `/auth/login|callback|logout`, `/me`, `DELETE /account`; `/sync`, `/sync/stop`, `/sync/status` (also reports `refilling`);
+Routes (all but `/health` and `/auth/*` need the signed-in cookie and act only on the caller's own mailbox): `/auth/login|callback|logout`, `/me`, `DELETE /account`; `/sync`, `/sync/stop`, `/sync/status` (also reports `refilling`);
 `/summary`, `/needs-action`, `/digest`, `/storage`, `/messages/{id}`; `/groups` (+filters), `/groups/hologram`, `/groups/{id}/hologram|subjects|messages`;
 `/actions`, `/actions/preview`, `/actions/{batch}/undo`, `/actions/log`; `/topics`, `/map`, `/topics/status`, `POST /topics/recluster`, `/topics/{id}/messages`;
 `/hier/{path}`, `/hier/{path}/messages`; `/trash`, `POST /trash/purge`, `/health`.
 
-Settings (`.env`): DATABASE_URL, TOKEN_KEY, SESSION_SECRET, GOOGLE_CLIENT_ID/SECRET, OAUTH_REDIRECT_URI, FRONTEND_URL, OWNER_EMAIL, INITIAL_FETCH=1000,
+Settings (`.env`): DATABASE_URL, TOKEN_KEY, SESSION_SECRET, GOOGLE_CLIENT_ID/SECRET, OAUTH_REDIRECT_URI, FRONTEND_URL, OWNER_EMAIL, ALLOWED_EMAILS (comma list), MAX_USERS=10, USER_DATA_DIR, INITIAL_FETCH=1000,
 SYNC_INTERVAL_MINUTES=20, ALLOW_PERMANENT_DELETE=false, TOPICS_ENABLED, EMBED_MODEL, TOPIC_MIN_CLUSTER_SIZE=8, TOPIC_MIN_MESSAGES=30, RECLUSTER_DAYS=7,
 GMAIL_RATE_PER_SEC=8, CLUSTER_CAP=360, USER_CAP=1000, BATCH_SIZE=25, TOPIC_MILESTONES="30,200,1000", TITLE_MODEL_PATH (optional .gguf), TITLE_MIN_SIMILARITY=0.75, TITLE_MERGE_SIMILARITY=0.93.
 
@@ -72,16 +73,21 @@ works" text per tab; update it when behaviour changes), `ClusterMap.jsx` (only i
   or learning from corrections (only discussed; a simple version would be stored overrides + few-shot examples).
 - Colour rule in the agreed redesign: state hues (urgent red, needs-reply amber, FYI grey, junk violet) appear ONLY on tags/score rings/pips; cluster colours are cool blues/violets/greens (identity only).
 
-## Pilot direction (discussed with the owner; only the caps and batch loading are built)
-Goal: a small pilot, at most **10 users at a time**, not a public launch. Agreed rules, now in code: 1,000 live mails per mailbox (`USER_CAP`), loaded and embedded in batches of 25 (`BATCH_SIZE`), topics grown batch by batch and rebuilt only at milestones, refill with older mail as mail leaves. The owner's reasoning: a person cannot view 1,000 mails, he views clusters, so a small live set is enough and keeps the worker light.
-NOT built yet (needs the owner's go-ahead; propose, do not start): multi-user (users table, `user_id` on all 12 tables, per-user encrypted Gmail token, user filter on every query, isolation tests), Postgres + Alembic migrations (still no migrations: never alter an existing table without writing one), job queue + separate worker with fair turns between users (round-robin batches) replacing the in-process flags in `control.py` (still ONE uvicorn worker), per-user Gmail pacing, per-user "delete my data".
-Hosting ideas discussed: Google Cloud (Cloud Run, Cloud SQL, Secret Manager, Cloud Scheduler, a CPU-always worker) or a cheap always-on VM for backend+worker+Postgres with the dashboard on Cloudflare Pages. A $0 stack (GitHub + Docker + Cloudflare Pages + Neon) fits only the frontend and git; the backend needs an always-on server with enough RAM for the local models. Google OAuth "Testing" mode allows up to 100 listed test users (tokens reportedly expire after about 7 days; verify in Google's docs); a public launch needs Google verification of the restricted Gmail scope with a paid security assessment, a domain, a privacy policy and terms.
-Open questions the owner has not answered: invited-only or open sign-up; free or paid; heading model in the pilot or real subjects only; Hindi/Hinglish mail expected or not; keep the single-owner mode; domain and Google Cloud account available; multi-user in code vs 10 separate copies (recommended: multi-user in code).
+## Pilot direction (discussed with the owner)
+Goal: a small pilot, at most **10 users at a time**, not a public launch. Built and tested (with fake Gmail only):
+- Mailbox rules: 1,000 live mails per mailbox (`USER_CAP`), loaded and embedded in batches of 25 (`BATCH_SIZE`), topics grown batch by batch and rebuilt only at milestones, refill with older mail as mail leaves. Reasoning: a person cannot view 1,000 mails, he views clusters.
+- **Users**: `users` table + sign-in for invited accounts + **one database file per user** (see `users.py`, `db.py`, `auth.py` above). Sign-up is invited-only: add the address to `ALLOWED_EMAILS` (and as a Test user in Google Cloud); removing it locks that person out on their next request. Account deletion revokes the token, erases the data, deletes the user's file and takes them off the list.
+- **Decision (chosen over `user_id` columns on every table):** a separate database per user. Reason: isolation is by construction (no forgotten `WHERE user_id` can leak mail), no existing table changes (no migration needed), "delete my data" = delete a file, SQLite writers never contend across users. Trade-offs: SQLite only (`_engine_for` raises for a non-SQLite `DATABASE_URL`), many small files do not scale to thousands of users, no cross-user queries. If the app ever outgrows this, move to Postgres with a `user_id` column + migrations then.
+Hosting: the app stays on the owner's existing Google Cloud VM (Docker Compose + Caddy, see `deploy/README.md`); scale it up by resizing the VM. `deploy/backup.sh` now backs up every user database.
+NOT built yet (propose, do not start): a real job queue + separate worker with fair round-robin turns (today: the scheduler syncs users one after another, but "Sync now" and refills from several users can run at the same time in this one process), per-user Gmail pacing (the pacer in `gmail.py` is shared by the whole process, which is safe for Google's quota), an admin screen / disabling a user without editing `.env`, Postgres for several users, Alembic migrations, open sign-up.
+Google Cloud settings needed for the pilot (the owner does these in the console): keep the OAuth app in *Testing*, add every pilot user's Gmail as a **Test user** (max 100; their sign-in expires after about 7 days: tokens in Testing mode reportedly last 7 days, verify in Google's docs), keep scopes `openid`, `email`, `gmail.modify` (nothing new), keep the same redirect URI, Gmail API enabled; then put the same addresses in `ALLOWED_EMAILS` in `deploy/.env` and run `docker compose up -d`. A public launch would need Google verification of the restricted Gmail scope with a paid security assessment, a domain, a privacy policy and terms.
+Open questions the owner has not answered: free or paid; heading model in the pilot or real subjects only; Hindi/Hinglish mail expected or not; domain and (for later) a separate worker VM.
 Gmail limits (from memory, verify in Google's docs): about 250 quota units/second per user; reading or listing mail costs about 5 units; the app paces 8 calls/s (about 40 units/s) and retries on rate-limit errors.
 
 ## Not built / known gaps
 - The redesigned UI (night-sky look, right-hand inspector panel, Overview) exists only as a mock-up artifact (https://claude.ai/artifact/PrxV6k9etpHcqQuMPVsnjd, may be stale); the real app still has the older HUD layout. Apply it as a restyle, keeping every feature.
 - Tap-to-fly and the holograms were tested with a mouse in Chromium, not on a real tablet. The Docker image does not include llama-cpp or a title model (headings fall back to real subjects).
+- Several-user behaviour (sign-in callback, isolation, per-user flags, deletion) is covered by unit/API tests with a fake Gmail and a faked Google flow; **sign-in with two real Google accounts has not been tried**. Users who were deleted can sign in again (they are still on the allow-list) and get a fresh empty mailbox.
 - The refill uses Gmail's `before:<epoch seconds>` search operator; tested only against `FakeGmail` (which parses it), not against real Gmail yet. Batch loading, caps and milestones were verified by unit tests only, not in a browser or with a real mailbox.
 - Hindi/Hinglish mail is untested (embedding model is English). Thresholds 0.93 / 0.75 were tuned on small samples. `Bubbles.jsx` unused.
 

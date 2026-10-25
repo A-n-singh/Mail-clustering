@@ -9,7 +9,8 @@ from sqlalchemy.pool import StaticPool
 
 from app import auth
 from app.config import settings
-from app.db import Base, get_db
+from app import db as dbmod
+from app.db import Base, CentralBase, get_central_db, get_db
 from app.main import app
 from app.models import Owner
 
@@ -36,6 +37,11 @@ def setup(monkeypatch, email="me@example.com"):
     Base.metadata.create_all(e)
     S = sessionmaker(bind=e, expire_on_commit=False)
     app.dependency_overrides[get_db] = lambda: S()
+    ec = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    CentralBase.metadata.create_all(ec)
+    SC = sessionmaker(bind=ec, expire_on_commit=False)
+    app.dependency_overrides[get_central_db] = lambda: SC()      # the user list
+    monkeypatch.setattr(dbmod, "open_user_session", lambda key: S())  # that user's own database
     monkeypatch.setattr(settings, "token_key", Fernet.generate_key().decode())
     monkeypatch.setattr(auth, "build_flow", FakeFlow)
     import google.oauth2.id_token as idt
