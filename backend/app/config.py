@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     # Only this Google account may sign in (single-owner app).
     owner_email: str = ""
     # Pilot: who may sign in. OWNER_EMAIL always may (and is the admin); ALLOWED_EMAILS = more Google accounts, comma separated.
+    # OPEN_SIGNUP=true: ANY Google account may sign in and gets their own mailbox (up to MAX_USERS people). false = only OWNER_EMAIL + ALLOWED_EMAILS.
+    open_signup: bool = False
     allowed_emails: str = ""
     max_users: int = 10  # at most this many accounts can ever sign up (the owner is always let in)
     # Each user's mail lives in their own database file, so one user can never see another's data. Empty = a "users" folder

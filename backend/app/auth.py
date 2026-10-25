@@ -1,4 +1,4 @@
-"""Google sign-in. Only OWNER_EMAIL and the accounts in ALLOWED_EMAILS may log in; each gets their own mailbox database."""
+"""Google sign-in. With OPEN_SIGNUP any Google account may log in, otherwise only OWNER_EMAIL and ALLOWED_EMAILS; each gets their own mailbox database."""
 from dataclasses import dataclass
 
 from fastapi import Cookie, HTTPException
@@ -44,7 +44,11 @@ def allowed_emails() -> set[str]:
 
 
 def is_allowed(email: str) -> bool:
-    return email.strip().lower() in allowed_emails()
+    """Open sign-up: any Google account (it still has to sign in through Google). Otherwise only the owner and ALLOWED_EMAILS."""
+    email = email.strip().lower()
+    if settings.open_signup:
+        return "@" in email
+    return email in allowed_emails()
 
 
 def is_owner(email: str) -> bool:
@@ -66,7 +70,7 @@ def make_session(email: str, uid: int = 0, data_key: str | None = None) -> str:
 
 
 async def current_user(session: str | None = Cookie(default=None)) -> Principal:
-    """Reads the signed cookie. Only allowed accounts get in, and the allow-list is checked on every request, so removing an
+    """Reads the signed cookie (only issued after a Google sign-in). In invited mode the allow-list is checked on every request, so removing an
     address from ALLOWED_EMAILS locks that person out at once. (async on purpose: it also selects this user's job flags.)"""
     try:
         data = _signer().loads(session or "", max_age=MAX_AGE)

@@ -146,3 +146,55 @@ def test_bad_data_keys_are_refused():
     for key in ("../evil", "u1/../../x", "", "mainx"):
         with pytest.raises(ValueError):
             dbmod.open_user_session(key)
+
+
+def _login_as(monkeypatch, email, verified=True):
+    """Runs the Google callback for `email` with a faked Google, and returns (client, response)."""
+    from cryptography.fernet import Fernet
+    from test_login import FakeFlow
+    from sqlalchemy.orm import sessionmaker
+    import google.oauth2.id_token as idt
+    monkeypatch.setattr(settings, "token_key", Fernet.generate_key().decode())
+    monkeypatch.setattr(auth, "build_flow", FakeFlow)
+    monkeypatch.setattr(idt, "verify_oauth2_token", lambda *a, **k: {"email": email, "email_verified": verified})
+    c = TestClient(app, follow_redirects=False)
+    c.get("/auth/login")
+    return c, c.get("/auth/callback?code=C&state=state-xyz")
+
+
+def test_open_signup_lets_any_google_account_in(monkeypatch):
+    monkeypatch.setattr(settings, "open_signup", True)
+    monkeypatch.setattr(settings, "allowed_emails", "")
+    c, r = _login_as(monkeypatch, "stranger@gmail.com")             # on nobody's list
+    assert r.status_code == 307
+    assert c.get("/me").json() == {"email": "stranger@gmail.com"}
+    with dbmod.central_session() as cs:
+        u = users.get_or_create(cs, "stranger@gmail.com", login=False)
+        assert u.role == "member" and u.data_key == f"u{u.id}"
+    with dbmod.open_user_session(u.data_key) as db:                  # their token sits in THEIR database
+        from app.models import Owner
+        assert db.scalar(select(Owner)).email == "stranger@gmail.com"
+
+
+def test_invited_mode_still_turns_strangers_away(monkeypatch):
+    monkeypatch.setattr(settings, "open_signup", False)
+    _, r = _login_as(monkeypatch, "stranger@gmail.com")
+    assert r.status_code == 403
+
+
+def test_open_signup_refuses_unverified_addresses_and_a_full_pilot(monkeypatch):
+    monkeypatch.setattr(settings, "open_signup", True)
+    _, r = _login_as(monkeypatch, "fake@gmail.com", verified=False)
+    assert r.status_code == 403
+    monkeypatch.setattr(settings, "max_users", 1)
+    assert _login_as(monkeypatch, "first@gmail.com")[1].status_code == 307
+    _, full = _login_as(monkeypatch, "second@gmail.com")
+    assert full.status_code == 403 and "full" in full.json()["detail"]
+    assert _login_as(monkeypatch, "first@gmail.com")[1].status_code == 307   # the first one can always come back
+
+
+def test_deleting_the_account_signs_the_user_out(monkeypatch):
+    monkeypatch.setattr(settings, "open_signup", True)
+    c, _ = _login_as(monkeypatch, "leaver@gmail.com")
+    r = c.delete("/account")
+    assert r.json() == {"ok": True} and "session=" in r.headers.get("set-cookie", "") and "Max-Age=0" in r.headers["set-cookie"]

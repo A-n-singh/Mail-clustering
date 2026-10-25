@@ -3,7 +3,7 @@ import hmac
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -171,6 +171,8 @@ def callback(code: str, state: str, request: Request, central: Session = Depends
     flow.fetch_token(code=code)
     info = id_token.verify_oauth2_token(flow.credentials.id_token, GoogleRequest(), settings.google_client_id)
     email = info["email"]
+    if not info.get("email_verified", True):
+        raise HTTPException(403, "Google says this e-mail address is not verified")
     if not auth.is_allowed(email):
         raise HTTPException(403, "This account is not allowed")
     try:
@@ -201,7 +203,7 @@ def me(user: auth.Principal = Depends(auth.current_user)):
 
 
 @app.delete("/account")
-def delete_account(db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user),
+def delete_account(response: Response, db: Session = Depends(get_db), user: auth.Principal = Depends(auth.current_user),
                    central: Session = Depends(get_central_db)):
     """Revoke the Google token and erase every row of THIS user's mailbox, and take them off the user list."""
     import httpx
@@ -218,6 +220,7 @@ def delete_account(db: Session = Depends(get_db), user: auth.Principal = Depends
     if user.data_key != "main":
         db.close()
         dbmod.drop_user_data(user.data_key)  # their own database file goes away completely
+    response.delete_cookie(auth.COOKIE)  # signed out: with open sign-up a stale cookie must not quietly recreate an empty mailbox
     return {"ok": True}
 
 

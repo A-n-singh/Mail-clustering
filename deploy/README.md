@@ -26,13 +26,15 @@ docker compose exec backend python -m app.doctor --model     # plain-language ch
 Open `https://myinbox.duckdns.org`, press **Sign in with Google** (Google warns the app is unverified: *Advanced > Go to ...*),
 then run `docker compose exec backend python -m app.doctor --live`.
 
-## Adding pilot users (up to `MAX_USERS`, default 10)
-1. **Google Cloud console** (the same project and OAuth client, nothing else changes): *Google Auth platform > Audience*: keep **Testing**, and under **Test users** add each person's Gmail address (up to 100 are allowed).
-   Do not add scopes or redirect URIs: they stay `gmail.modify` and `https://<your domain>/auth/callback`. Each person sees the "unverified app" warning (*Advanced > Go to ...*) and has to sign in again about every 7 days while the app is in Testing.
-2. **On the VM**: put the same addresses in `deploy/.env`, e.g. `ALLOWED_EMAILS=ann@gmail.com,bob@gmail.com` (the owner is `OWNER_EMAIL`), then `docker compose up -d` to apply it.
-3. Each person opens the site and presses **Sign in with Google**. They get their own mailbox (a file `users/u<number>.db` inside the `data` volume); nobody can see anyone else's mail.
-4. To remove someone: delete their address from `ALLOWED_EMAILS` and `docker compose up -d` (they are locked out at once), and remove them from the Google Test users. Their own **Account > Delete** erases their mailbox file and token.
-Both the Google Test-user list and `ALLOWED_EMAILS` must contain the address: Google decides who may reach the sign-in page, the app decides who may enter.
+## Letting anyone sign in (open sign-up, up to `MAX_USERS`, default 10)
+With `OPEN_SIGNUP=true` in `deploy/.env` (the example file has it), **anyone who signs in with Google gets their own mailbox**; no address list. Each person gets a file
+`users/u<number>.db` inside the `data` volume and cannot see anyone else's mail. `OPEN_SIGNUP=false` goes back to "only `OWNER_EMAIL` + `ALLOWED_EMAILS`".
+Google has its own gate in front of the app (rules change, check Google's current docs):
+1. **Testing** status (what you have now): only addresses listed under *Google Auth platform > Audience > Test users* (max 100) can sign in, and their sign-in expires about every 7 days.
+2. **For anyone to sign in:** *Audience > Publish app* (status *In production*). The consent screen then needs an app name, support e-mail, an **authorised domain**, and links to a **privacy policy** and **terms** page on that domain. Scopes (`gmail.modify`), the redirect URI and the Gmail API stay as they are.
+3. While the app is **unverified**, every person sees the "unverified app" screen (*Advanced > Go to ...*) and Google limits the app to about 100 users in total. To go beyond that, Google must **verify** the restricted Gmail scope, which needs a security assessment (CASA) that costs money.
+4. `MAX_USERS` (default 10) is this app's own limit: the 11th new person gets "The pilot is full". The owner always gets in. Raise it only when the VM can carry more people.
+5. Apply changes: edit `deploy/.env`, then `docker compose up -d`. A user can erase their own mailbox and token with **Account > Delete**.
 
 ## First-run checklist (tell me which step fails and paste the doctor output, never the secrets)
 1. `doctor --model` shows no red lines.
@@ -49,10 +51,10 @@ Keep `ALLOW_PERMANENT_DELETE=false` until you have looked at your real clusters.
 - Update: `git pull && docker compose up -d --build`
 - Backup: `./backup.sh` (one `smart-inbox-DATE.tar.gz` holding `mail.db` = the owner and `u<number>.db` = every other user; copy it off the VM). To restore, copy the files back into the `data` volume (`mail.db` and the `users/` folder) while the backend is stopped.
 - Stop: `docker compose down` (your data stays; add `-v` only if you want to erase it)
-- In Google's *Testing* mode the sign-in expires every 7 days; just sign in again.
+- In Google's *Testing* mode the sign-in expires every 7 days; just sign in again. (Published apps: see "Letting anyone sign in".)
 
 ## Safety
-Only `OWNER_EMAIL` and the addresses in `ALLOWED_EMAILS` can sign in, and each has a separate database file. The Google token is stored encrypted with `TOKEN_KEY`. The backend is not
+With `OPEN_SIGNUP=true` anyone who signs in with Google can use the app (up to `MAX_USERS`); with `false` only `OWNER_EMAIL` and `ALLOWED_EMAILS`. Every user has a separate database file. The Google token is stored encrypted with `TOKEN_KEY`. The backend is not
 exposed to the internet, only Caddy is (ports 80/443). Keep `.env` private (`chmod 600`, already done by `init-env.sh`).
 
 ## If a sync fails with "rateLimitExceeded"
